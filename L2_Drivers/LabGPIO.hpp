@@ -10,7 +10,9 @@ private:
     uint8_t m_pin;
 
 public:
-    LabGPIO(uint8_t port, uint8_t pin);
+    LabGPIO();
+
+    bool init(uint8_t port, uint8_t pin);
     void setAsInput();
     void setAsOutput();
     void setDirection(bool output);

@@ -145,13 +145,14 @@
 #define INCLUDE_uxTaskGetStackHighWaterMark	1
 #define INCLUDE_xTaskGetSchedulerState      1
 #define INCLUDE_xTaskGetIdleTaskHandle      1
+#define INCLUDE_xEventGroupSetBitFromISR    1
 
 /* FreeRTOS Timer or daemon task configuration */
-#define configUSE_TIMERS                0                   ///< Enable or disable the FreeRTOS timer task
+#define configUSE_TIMERS                1                   ///< Enable or disable the FreeRTOS timer task
 #define configTIMER_TASK_PRIORITY       PRIORITY_HIGH       ///< Priority at which the timer task should run (use highest)
 #define configTIMER_QUEUE_LENGTH        10                  ///< See FreeRTOS documentation
 #define configTIMER_TASK_STACK_DEPTH    STACK_BYTES(2048)   ///< Stack size for the timer task
-#define INCLUDE_xTimerPendFunctionCall  0                   ///< Uses timer daemon task, so needs configUSE_TIMERS to 1
+#define INCLUDE_xTimerPendFunctionCall  1                   ///< Uses timer daemon task, so needs configUSE_TIMERS to 1
 
 
 

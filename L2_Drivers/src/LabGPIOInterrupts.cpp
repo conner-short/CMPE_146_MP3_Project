@@ -4,7 +4,10 @@
 #include "LabGPIOInterrupts.hpp"
 #include "lpc_isr.h"
 
+#include "uart0_min.h"
+
 isr_ptr_t LabGPIOInterrupts::m_isr_table[2][2][31];
+void* LabGPIOInterrupts::m_isr_param_table[2][2][31];
 
 LabGPIOInterrupts& LabGPIOInterrupts::getInstance()
 {
@@ -18,7 +21,7 @@ void LabGPIOInterrupts::init()
     NVIC_EnableIRQ(EINT3_IRQn);
 }
 
-bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_ptr_t pin_isr, InterruptCondition_E condition)
+bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_ptr_t pin_isr, void* isr_param, InterruptCondition_E condition)
 {
     /* Check for valid port and pin numbers */
     switch(port)
@@ -48,7 +51,9 @@ bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_p
     switch(condition)
     {
         case RISING:
-            m_isr_table[port][0][pin] = pin_isr;  /* Add ISR to table */
+            /* Add ISR to table */
+            m_isr_table[port][0][pin] = pin_isr;
+            m_isr_param_table[port][0][pin] = isr_param;
 
             /* Enable the rising-edge interrupt for this pin */
             if(port == 0)
@@ -63,6 +68,7 @@ bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_p
 
         case FALLING:
             m_isr_table[port][1][pin] = pin_isr;
+            m_isr_param_table[port][1][pin] = isr_param;
 
             if(port == 0)
             {
@@ -77,6 +83,8 @@ bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_p
         case BOTH:
             m_isr_table[port][0][pin] = pin_isr;
             m_isr_table[port][1][pin] = pin_isr;
+            m_isr_param_table[port][0][pin] = isr_param;
+            m_isr_param_table[port][1][pin] = isr_param;
 
             if(port == 0)
             {
@@ -86,7 +94,7 @@ bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_p
             else
             {
                 LPC_GPIOINT->IO2IntEnR |= (1 << pin);
-                LPC_GPIOINT->IO0IntEnF |= (1 << pin);
+                LPC_GPIOINT->IO2IntEnF |= (1 << pin);
             }
             break;
 
@@ -110,23 +118,23 @@ void LabGPIOInterrupts::externalIRQHandler(void)
         if((LPC_GPIOINT->IO0IntStatR & mask) != 0)
         {
             LPC_GPIOINT->IO0IntClr |= mask;    /* Clear the interrupt */
-            m_isr_table[0][0][i]();   /* Call the service routine */
+            m_isr_table[0][0][i](m_isr_param_table[0][0][i]);   /* Call the service routine */
         }
         else if((LPC_GPIOINT->IO0IntStatF & mask) != 0)
         {
             LPC_GPIOINT->IO0IntClr |= mask;
-            m_isr_table[0][1][i]();
+            m_isr_table[0][1][i](m_isr_param_table[0][1][i]);
         }
 
         if((LPC_GPIOINT->IO2IntStatR & mask) != 0)
         {
             LPC_GPIOINT->IO2IntClr |= mask;
-            m_isr_table[1][0][i]();
+            m_isr_table[1][0][i](m_isr_param_table[1][0][i]);
         }
         else if((LPC_GPIOINT->IO2IntStatF & mask) != 0)
         {
             LPC_GPIOINT->IO2IntClr |= mask;
-            m_isr_table[1][1][i]();
+            m_isr_table[1][1][i](m_isr_param_table[1][1][i]);
         }
     }
 }

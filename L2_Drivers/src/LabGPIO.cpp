@@ -1,7 +1,15 @@
+#include <stddef.h>
+
 #include "LabGPIO.hpp"
 #include "LPC17xx.h"
 
-LabGPIO::LabGPIO(uint8_t port, uint8_t pin)
+LabGPIO::LabGPIO()
+{
+    m_port = NULL;
+    m_pin = 0;
+}
+
+bool LabGPIO::init(uint8_t port, uint8_t pin)
 {
     m_pin = pin;
 
@@ -19,6 +27,7 @@ LabGPIO::LabGPIO(uint8_t port, uint8_t pin)
             {
                 LPC_PINCON->PINSEL1 &= ~(3 << (pin << 1));
             }
+
             break;
 
         case 1:
@@ -32,6 +41,7 @@ LabGPIO::LabGPIO(uint8_t port, uint8_t pin)
             {
                 LPC_PINCON->PINSEL3 &= ~(3 << (pin << 1));
             }
+
             break;
 
         case 2:
@@ -45,6 +55,7 @@ LabGPIO::LabGPIO(uint8_t port, uint8_t pin)
             {
                 LPC_PINCON->PINSEL5 &= ~(3 << (pin << 1));
             }
+
             break;
 
         case 3:
@@ -58,6 +69,7 @@ LabGPIO::LabGPIO(uint8_t port, uint8_t pin)
             {
                 LPC_PINCON->PINSEL7 &= ~(3 << (pin << 1));
             }
+
             break;
 
         case 4:
@@ -71,11 +83,14 @@ LabGPIO::LabGPIO(uint8_t port, uint8_t pin)
             {
                 LPC_PINCON->PINSEL9 &= ~(3 << (pin << 1));
             }
+
             break;
 
         default:
-            break;
+            return false;
     }
+
+    return true;
 }
 
 void LabGPIO::setAsInput()
