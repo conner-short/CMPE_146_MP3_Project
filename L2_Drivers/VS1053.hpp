@@ -148,17 +148,21 @@ private:
 
     static void workerTaskFunc(void* p);
 
-    static bool controlRegRead(VS1053* dec, control_reg_t reg, uint16_t* val, bool acquireBus);
-    static bool controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus);
-    static bool controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits);
-    static bool controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits);
+    static uint16_t controlRegRead(VS1053* dec, control_reg_t reg, bool acquireBus);
+    static void controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus);
+    static void controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits);
+    static void controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits);
 
-    static bool setVolumeInternal(VS1053* dec, uint8_t vol);
+    static void setVolumeInternal(VS1053* dec, uint8_t vol);
 
     static void waitForDReq(VS1053* dec);
     static void transceive(VS1053* dec, spi_cmd_t* cmd);
 
     static uint8_t getSpiDivider(bool speed);
+
+    static bool sendNextDataPacket(VS1053* dec, bool* eof);
+
+    static uint8_t getEndFillByte(VS1053* dec);
 };
 
 #endif

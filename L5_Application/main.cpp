@@ -9,10 +9,26 @@ void vDebugTask(void* p)
 {
     VS1053* dec = (VS1053*)p;
 
-    if(!dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\02_-_Moar_Ghosts_\'n\'_Stuff.mp3"))
-    {
-        uart0_puts("Error loading file");
-    }
+    /* Play the first 20 seconds of each song and stop at the end */
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\01_-_FML.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\02_-_Moar_Ghosts_\'n\'_Stuff.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\03_-_Ghosts_n_Stuff_(feat._Rob_Swire).mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\04_-_Hi_Friend!.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\05_-_Bot.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\06_-_Word_Problems.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\07_-_Soma.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\08_-_Lack_of_A_Better_Name.mp3");
+    vTaskDelay(20000);
+    dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\09_-_The_16th_Hour.mp3");
+    vTaskDelay(20000);
+    dec->stop();
 
     vTaskSuspend(NULL);
 }
@@ -47,7 +63,7 @@ int main(void) {
 
     scheduler_add_task(new terminalTask(1));
 
-    xTaskCreate(vDebugTask, "Terminal", STACK_SIZE, &mp3Decoder, 1, NULL);
+    xTaskCreate(vDebugTask, "Debug", STACK_SIZE, &mp3Decoder, 1, NULL);
 
     scheduler_start();
 
