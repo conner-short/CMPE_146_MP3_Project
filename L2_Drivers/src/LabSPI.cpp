@@ -13,6 +13,7 @@ SemaphoreHandle_t LabSPI::bus_lock;
 LabSPI::LabSPI()
 {
     bus_lock = xSemaphoreCreateMutex();
+    xSemaphoreGive(bus_lock);
     mPeripheral = 0;
 }
 

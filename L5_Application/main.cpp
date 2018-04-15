@@ -11,7 +11,7 @@ void vDebugTask(void* p)
 
     FIL file;
 
-    if(f_open(&file, "1:\\Music\\Gorillaz\\Demon_Days\\02_-_Last_Living_Souls.mp3", FA_READ) == FR_OK)
+    if(f_open(&file, "1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\02_-_Moar_Ghosts_\'n\'_Stuff.mp3", FA_READ) == FR_OK)
     {
         dec->play(&file);
     }

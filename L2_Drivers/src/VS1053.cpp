@@ -56,14 +56,6 @@ bool VS1053::init(LabSPI::Peripheral spiChannel, pin_t& data_cs, pin_t& control_
 
     dataReq.setAsInput();
 
-    /* Create SPI command queue */
-    spiQueue = xQueueCreate(128, sizeof(spi_cmd_t));
-
-    if(spiQueue == NULL)
-    {
-        return false;
-    }
-
     /* Create event flags */
     eventFlags = xEventGroupCreate();
 
@@ -72,22 +64,8 @@ bool VS1053::init(LabSPI::Peripheral spiChannel, pin_t& data_cs, pin_t& control_
         return false;
     }
 
-    /* Create state machine wait semaphore */
-    stateMachineWaitSem = xSemaphoreCreateBinary();
-
-    if(stateMachineWaitSem == NULL)
-    {
-        return false;
-    }
-
     /* Create tasks */
-
-    if(xTaskCreate(stateMachineTaskFunc, "VS1053-SM", STACK_SIZE, this, 3, &stateMachineTask) != pdPASS)
-    {
-        return false;
-    }
-
-    if(xTaskCreate(dataTaskFunc, "VS1053-DR", STACK_SIZE, this, 2, &dataTask) != pdPASS)
+    if(xTaskCreate(workerTaskFunc, "VS1053", STACK_SIZE, this, 2, &workerTask) != pdPASS)
     {
         return false;
     }
@@ -126,7 +104,7 @@ void VS1053::handleDataReqIsr(void* p)
     }
 }
 
-void VS1053::stateMachineTaskFunc(void* p)
+void VS1053::workerTaskFunc(void* p)
 {
     VS1053* dec = (VS1053*)p;
 
@@ -137,50 +115,47 @@ void VS1053::stateMachineTaskFunc(void* p)
         switch(dec->state)
         {
             case INIT:
-                if(xEventGroupWaitBits(dec->eventFlags, EVENT_INIT, pdTRUE, pdTRUE, portMAX_DELAY))
+                /* Do a soft reset */
+                if(!controlRegSet(dec, MODE, 0x0002))
                 {
-                    /* Do a soft reset */
-                    if(!controlRegSet(dec, MODE, 0x0002))
-                    {
-                        break;
-                    }
-
-                    waitForDReq(dec);
-
-                    /* Set mode register */
-                    if(!controlRegWrite(dec, MODE, 0x0800))
-                    {
-                        break;
-                    }
-
-                    /* Set initial volume to -12dB */
-                    if(!setVolumeInternal(dec, 0x00))
-                    {
-                        break;
-                    }
-
-                    /* Set clock control register */
-                    if(!controlRegWrite(dec, CLOCKF, 0xc000))
-                    {
-                        break;
-                    }
-
-                    waitForDReq(dec); /* Wait for clock to settle */
-
-                    /* Bump SPI speed up after clock has settled */
-                    if(!spi.init(dec->spiDev, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, getSpiDivider(true)))
-                    {
-                        break;
-                    }
-
-                    dec->state = IDLE;
+                    break;
                 }
+
+                /* Set mode register */
+                if(!controlRegWrite(dec, MODE, 0x0800, true))
+                {
+                    break;
+                }
+
+                /* TODO: Set initial volume to -12dB */
+                if(!setVolumeInternal(dec, 0x00))
+                {
+                    break;
+                }
+
+                /* Set clock control register */
+                if(!controlRegWrite(dec, CLOCKF, 0xc000, true))
+                {
+                    break;
+                }
+
+                waitForDReq(dec); /* Wait for clock to settle */
+
+                /* Bump SPI speed up after clock has settled */
+                if(!spi.init(dec->spiDev, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, getSpiDivider(true)))
+                {
+                    break;
+                }
+
+                dec->state = IDLE;
                 break;
 
             case IDLE:
                 if(xEventGroupWaitBits(dec->eventFlags, EVENT_NEW_FILE_SELECTED, pdTRUE, pdTRUE, portMAX_DELAY))
                 {
                     /* New file was selected by the user */
+                    dec->bufferIndex  = 0;
+                    dec->fileBufferLen = 0;
                     dec->state = PLAYING;
                 }
                 break;
@@ -210,10 +185,12 @@ void VS1053::stateMachineTaskFunc(void* p)
                 cmd.len = ((dec->fileBufferLen - dec->bufferIndex) > MAX_TRANSCEIVE_SIZE)
                         ? MAX_TRANSCEIVE_SIZE
                                 : (dec->fileBufferLen - dec->bufferIndex);
-                cmd.notify = dec->stateMachineWaitSem;
 
-                /* Enqueue the data packet */
-                xQueueSendToBack(dec->spiQueue, &cmd, portMAX_DELAY);
+                xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+
+                transceive(dec, &cmd);
+
+                xSemaphoreGive(LabSPI::bus_lock);
 
                 dec->bufferIndex += cmd.len;
                 break;
@@ -227,59 +204,6 @@ void VS1053::stateMachineTaskFunc(void* p)
             default:
                 dec->state = INIT;
                 break;
-        }
-    }
-}
-
-void VS1053::dataTaskFunc(void* p)
-{
-    VS1053* dec = (VS1053*)p;
-
-    while(1)
-    {
-        spi_cmd_t cmd;
-
-        if(xQueueReceive(dec->spiQueue, &cmd, portMAX_DELAY) == pdTRUE)
-        {
-            waitForDReq(dec);
-
-            /* Command is ready and DREQ is high */
-
-            /* Select chip */
-            switch(cmd.type)
-            {
-                case DATA:
-                    dec->dataCs.setLow();
-                    break;
-
-                case CMD:
-                    dec->controlCs.setLow();
-                    break;
-            }
-
-            /* Transfer bytes */
-            for(uint32_t i = 0; (i < cmd.len) && (i < MAX_TRANSCEIVE_SIZE); i++)
-            {
-                cmd.buffer[i] = spi.transfer(cmd.buffer[i]);
-            }
-
-            /* Deselect chip */
-            switch(cmd.type)
-            {
-                case DATA:
-                    dec->dataCs.setHigh();
-                    break;
-
-                case CMD:
-                    dec->controlCs.setHigh();
-                    break;
-            }
-
-            /* Notify command requester on completion */
-            if(cmd.notify != NULL)
-            {
-                xSemaphoreGive(cmd.notify);
-            }
         }
     }
 }
@@ -313,10 +237,10 @@ void VS1053::stop()
 
 bool VS1053::setVolumeInternal(VS1053* dec, uint8_t vol)
 {
-    return controlRegWrite(dec, VOL, ((uint16_t)(vol << 8)) | ((uint16_t)(vol)));
+    return controlRegWrite(dec, VOL, ((uint16_t)(vol << 8)) | ((uint16_t)(vol)), true);
 }
 
-bool VS1053::controlRegRead(VS1053* dec, control_reg_t reg, uint16_t* val)
+bool VS1053::controlRegRead(VS1053* dec, control_reg_t reg, uint16_t* val, bool acquireBus)
 {
     uint8_t cmd_buffer[4];
 
@@ -330,27 +254,25 @@ bool VS1053::controlRegRead(VS1053* dec, control_reg_t reg, uint16_t* val)
     cmd.type = CMD;
     cmd.buffer = cmd_buffer;
     cmd.len = 4;
-    cmd.notify = xSemaphoreCreateBinary();
 
-    if(cmd.notify == NULL)
+    if(acquireBus)
     {
-        return false;
+        xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
     }
 
-    /* Enqueue command */
-    xQueueSendToBack(dec->spiQueue, &cmd, portMAX_DELAY);
+    transceive(dec, &cmd);
 
-    /* Wait for completion */
-    xSemaphoreTake(cmd.notify, portMAX_DELAY);
-
-    vSemaphoreDelete(cmd.notify);
+    if(acquireBus)
+    {
+        xSemaphoreGive(LabSPI::bus_lock);
+    }
 
     *val = ((((uint16_t)cmd_buffer[2]) << 8) | ((uint16_t)cmd_buffer[3]));
 
     return true;
 }
 
-bool VS1053::controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val)
+bool VS1053::controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus)
 {
     uint8_t cmd_buffer[4];
 
@@ -364,18 +286,18 @@ bool VS1053::controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val)
     cmd.type = CMD;
     cmd.buffer = cmd_buffer;
     cmd.len = 4;
-    cmd.notify = xSemaphoreCreateBinary();
 
-    if(cmd.notify == NULL)
+    if(acquireBus)
     {
-        return false;
+        xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
     }
 
-    xQueueSendToBack(dec->spiQueue, &cmd, portMAX_DELAY);
+    transceive(dec, &cmd);
 
-    xSemaphoreTake(cmd.notify, portMAX_DELAY);
-
-    vSemaphoreDelete(cmd.notify);
+    if(acquireBus)
+    {
+        xSemaphoreGive(LabSPI::bus_lock);
+    }
 
     return true;
 }
@@ -384,17 +306,21 @@ bool VS1053::controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits)
 {
     uint16_t val;
 
-    if(!controlRegRead(dec, reg, &val))
+    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+
+    if(!controlRegRead(dec, reg, &val, false))
     {
         return false;
     }
 
     val |= bits;
 
-    if(!controlRegWrite(dec, reg, val))
+    if(!controlRegWrite(dec, reg, val, false))
     {
         return false;
     }
+
+    xSemaphoreGive(LabSPI::bus_lock);
 
     return true;
 }
@@ -403,25 +329,65 @@ bool VS1053::controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits)
 {
     uint16_t val;
 
-    if(!controlRegRead(dec, reg, &val))
+    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+
+    if(!controlRegRead(dec, reg, &val, false))
     {
         return false;
     }
 
     val &= ~bits;
 
-    if(!controlRegWrite(dec, reg, val))
+    if(!controlRegWrite(dec, reg, val, false))
     {
         return false;
     }
 
+    xSemaphoreGive(LabSPI::bus_lock);
+
     return true;
+}
+
+/* Bus lock must be acquired before entering this function */
+void VS1053::transceive(VS1053* dec, spi_cmd_t* cmd)
+{
+    waitForDReq(dec);
+
+    /* Select chip */
+    switch(cmd->type)
+    {
+        case DATA:
+            dec->dataCs.setLow();
+            break;
+
+        case CMD:
+            dec->controlCs.setLow();
+            break;
+    }
+
+    /* Transfer bytes */
+    for(uint32_t i = 0; i < cmd->len; i++)
+    {
+        cmd->buffer[i] = spi.transfer(cmd->buffer[i]);
+    }
+
+    /* Deselect chip */
+    switch(cmd->type)
+    {
+        case DATA:
+            dec->dataCs.setHigh();
+            break;
+
+        case CMD:
+            dec->controlCs.setHigh();
+            break;
+    }
 }
 
 void VS1053::waitForDReq(VS1053* dec) {
     if(!(dec->dataReq.getLevel()))
     {
-        xEventGroupWaitBits(dec->eventFlags, EVENT_DREQ_HIGH, pdFALSE, pdTRUE, portMAX_DELAY);
+        xEventGroupWaitBits(dec->eventFlags, EVENT_DREQ_HIGH, pdTRUE, pdTRUE, portMAX_DELAY);
     }
 }
 

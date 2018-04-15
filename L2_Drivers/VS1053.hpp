@@ -80,7 +80,6 @@ private:
         spi_cmd_type_t type;
         uint8_t* buffer;
 		uint32_t len;
-		SemaphoreHandle_t notify;
     } spi_cmd_t;
 
     state_t state = INIT;
@@ -94,31 +93,28 @@ private:
 
     PLAY_TYPE playType = PLAY; /* Play, FF, or rewind */
 
-    TaskHandle_t stateMachineTask = NULL;
-    TaskHandle_t dataTask = NULL;
+    TaskHandle_t workerTask = NULL;
 
     FIL currentFile;
     uint8_t fileBuffer[BUFFER_SIZE];
     uint32_t fileBufferLen = 0;
     uint32_t bufferIndex = 0;
 
-    QueueHandle_t spiQueue = NULL;
     EventGroupHandle_t eventFlags = NULL;
-    SemaphoreHandle_t stateMachineWaitSem = NULL;
 
     static void handleDataReqIsr(void* p);
 
-    static void stateMachineTaskFunc(void* p);
-    static void dataTaskFunc(void* p);
+    static void workerTaskFunc(void* p);
 
-    static bool controlRegRead(VS1053* dec, control_reg_t reg, uint16_t* val);
-    static bool controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val);
+    static bool controlRegRead(VS1053* dec, control_reg_t reg, uint16_t* val, bool acquireBus);
+    static bool controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus);
     static bool controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits);
     static bool controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits);
 
     static bool setVolumeInternal(VS1053* dec, uint8_t vol);
 
     static void waitForDReq(VS1053* dec);
+    static void transceive(VS1053* dec, spi_cmd_t* cmd);
 
     static uint8_t getSpiDivider(bool speed);
 };
