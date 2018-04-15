@@ -26,18 +26,60 @@ public:
         uint8_t port, pin;
     } pin_t;
 
-    bool init(LabSPI::Peripheral spiChannel, pin_t& data_cs, pin_t& control_cs, pin_t& dreq);
-    bool play(FIL* f);
+    /**
+     * Initializes the VS1053 decoder
+     *
+     * @param spi_channel  The SPI device the decoder is connected to
+     * @param data_cs      Port and pin numbers of the data chip select (XDCS)
+     * @param control_cs   Port and pin numbers of the control chip select (XCS)
+     * @param dreq         Port and pin numbers of the data request pin (DREQ)
+     *
+     * @return Retuns true on success, false otherwise
+     */
+    bool init(LabSPI::Peripheral spi_channel, pin_t& data_cs, pin_t& control_cs, pin_t& dreq);
+
+    /**
+     * Loads a file and begins playing it
+     *
+     * @param path  Path to the file
+     *
+     * @return Returns true on success, false otherwise
+     */
+    bool play(const char* path);
+
+    /**
+     * Pauses the current file if playing
+     */
     void pause(void);
+
+    /**
+     * Stops the current file
+     */
     void stop(void);
+
+    /**
+     * NOTE: NOT IMPLEMENTED YET
+     * Selects between normal playback, fast-forward, and rewind
+     *
+     * @param t  Playback type
+     */
     void setPlayType(PLAY_TYPE t);
+
+    /**
+     * Sets the playback volume
+     *
+     * @param vol  Offset from full volume in -0.5dB increments; 0x00 is full volume,
+     *             0xfe is silence, and 0xff powers off the amplifier
+     *
+     * @return Returns true on success, false otherwise
+     */
     bool setVolume(uint8_t vol);
 
 private:
     static const uint32_t SPI_FREQ_HZ = 7899000;
     static const uint32_t SPI_START_FREQ_HZ = 1500000;
     static const uint32_t STACK_SIZE = 1024;
-    static const uint32_t BUFFER_SIZE = 16384;
+    static const uint32_t BUFFER_SIZE = 8192;
 
     /* From datasheet */
     typedef enum

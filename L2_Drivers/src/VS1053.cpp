@@ -11,19 +11,16 @@
 #include "task.h"
 #include "VS1053.hpp"
 
-#include "uart0_min.h"
-
 #define EVENT_NEW_FILE_SELECTED  (1 << 0)
 #define EVENT_DREQ_HIGH          (1 << 1)
 #define EVENT_STOP_REQUESTED     (1 << 2)
-#define EVENT_INIT               (1 << 3)
 
 VS1053::VS1053() {}
 VS1053::~VS1053() {}
 
-bool VS1053::init(LabSPI::Peripheral spiChannel, pin_t& data_cs, pin_t& control_cs, pin_t& dreq)
+bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& data_cs, pin_t& control_cs, pin_t& dreq)
 {
-    spiDev = spiChannel;
+    spiDev = spi_channel;
 
     /* SPI init with low startup speed */
     if(!spi.init(spiDev, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, getSpiDivider(false)))
@@ -79,8 +76,6 @@ bool VS1053::init(LabSPI::Peripheral spiChannel, pin_t& data_cs, pin_t& control_
     {
         return false;
     }
-
-    xEventGroupSetBits(eventFlags, EVENT_INIT);
 
     return true;
 }
@@ -208,9 +203,9 @@ void VS1053::workerTaskFunc(void* p)
     }
 }
 
-bool VS1053::play(FIL* f)
+bool VS1053::play(const char* path)
 {
-    if(f == NULL)
+    if(path == NULL)
     {
         return false;
     }
@@ -219,7 +214,10 @@ bool VS1053::play(FIL* f)
     //setPlayType(PLAY); /* Disable FF / Rew, if enabled */
 
     /* Save the file */
-    memcpy(&currentFile, f, sizeof(FIL));
+    if(f_open(&currentFile, path, FA_READ) != FR_OK)
+    {
+        return false;
+    }
 
     /* Notify the state machine that the new file is ready */
     xEventGroupSetBits(eventFlags, EVENT_NEW_FILE_SELECTED);
@@ -348,7 +346,7 @@ bool VS1053::controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits)
     return true;
 }
 
-/* Bus lock must be acquired before entering this function */
+/* SPI bus lock must be acquired before entering this function */
 void VS1053::transceive(VS1053* dec, spi_cmd_t* cmd)
 {
     waitForDReq(dec);

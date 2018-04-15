@@ -9,15 +9,9 @@ void vDebugTask(void* p)
 {
     VS1053* dec = (VS1053*)p;
 
-    FIL file;
-
-    if(f_open(&file, "1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\02_-_Moar_Ghosts_\'n\'_Stuff.mp3", FA_READ) == FR_OK)
+    if(!dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\02_-_Moar_Ghosts_\'n\'_Stuff.mp3"))
     {
-        dec->play(&file);
-    }
-    else
-    {
-        uart0_puts("fs error");
+        uart0_puts("Error loading file");
     }
 
     vTaskSuspend(NULL);
@@ -33,7 +27,7 @@ int main(void) {
 
     if(!spi.init(LabSPI::SSP1, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, 8))
     {
-        uart0_puts("ssp1 init failed");
+        uart0_puts("Failed to initialize SSP1");
 
         while(1)
         {
@@ -43,7 +37,7 @@ int main(void) {
 
     if(!mp3Decoder.init(LabSPI::SSP0, data_cs, control_cs, dreq))
     {
-        uart0_puts("decoder init failed.");
+        uart0_puts("Failed to initialize decoder");
 
         while(1)
         {
@@ -53,7 +47,7 @@ int main(void) {
 
     scheduler_add_task(new terminalTask(1));
 
-    xTaskCreate(vDebugTask, "debug", STACK_SIZE, &mp3Decoder, 1, NULL);
+    xTaskCreate(vDebugTask, "Terminal", STACK_SIZE, &mp3Decoder, 1, NULL);
 
     scheduler_start();
 
