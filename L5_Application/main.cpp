@@ -37,9 +37,10 @@ int main(void) {
     const uint32_t STACK_SIZE = 1024;
 
     static VS1053 mp3Decoder;
-    VS1053::pin_t data_cs = {2, 7};
-    VS1053::pin_t control_cs = {2, 6};
+    VS1053::pin_t reset = {2, 4};
     VS1053::pin_t dreq = {2, 5};
+    VS1053::pin_t control_cs = {2, 6};
+    VS1053::pin_t data_cs = {2, 7};
 
     if(!spi.init(LabSPI::SSP1, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, 8))
     {
@@ -51,7 +52,7 @@ int main(void) {
         }
     }
 
-    if(!mp3Decoder.init(LabSPI::SSP0, data_cs, control_cs, dreq))
+    if(!mp3Decoder.init(LabSPI::SSP0, reset, data_cs, control_cs, dreq))
     {
         uart0_puts("Failed to initialize decoder");
 

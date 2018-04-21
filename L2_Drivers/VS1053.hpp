@@ -30,13 +30,14 @@ public:
      * Initializes the VS1053 decoder
      *
      * @param spi_channel  The SPI device the decoder is connected to
+     * @param reset        Port and pin numbers of the reset pin (XRESET)
      * @param data_cs      Port and pin numbers of the data chip select (XDCS)
      * @param control_cs   Port and pin numbers of the control chip select (XCS)
      * @param dreq         Port and pin numbers of the data request pin (DREQ)
      *
      * @return Retuns true on success, false otherwise
      */
-    bool init(LabSPI::Peripheral spi_channel, pin_t& data_cs, pin_t& control_cs, pin_t& dreq);
+    bool init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, pin_t& control_cs, pin_t& dreq);
 
     /**
      * Loads a file and begins playing it
@@ -104,6 +105,8 @@ private:
 
     typedef enum
     {
+        HW_RESET,
+        SW_RESET,
         INIT,
         IDLE,
         PLAYING,
@@ -129,6 +132,7 @@ private:
     LabSPI::Peripheral spiDev = LabSPI::SSP0;
 
     /* Pins */
+    LabGPIO resetPin;
     LabGPIO dataCs;
     LabGPIO controlCs;
     LabGPIO dataReq;

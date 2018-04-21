@@ -20,7 +20,7 @@
 VS1053::VS1053() {}
 VS1053::~VS1053() {}
 
-bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& data_cs, pin_t& control_cs, pin_t& dreq)
+bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, pin_t& control_cs, pin_t& dreq)
 {
     spiDev = spi_channel;
 
@@ -31,6 +31,14 @@ bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& data_cs, pin_t& control
     }
 
     /* Configure GPIO pins */
+
+    if(!resetPin.init(reset.port, reset.pin))
+    {
+        return false;
+    }
+
+    resetPin.setAsOutput();
+    resetPin.setLow();
 
     if(!dataCs.init(data_cs.port, data_cs.pin))
     {
@@ -79,6 +87,8 @@ bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& data_cs, pin_t& control
         return false;
     }
 
+    state = HW_RESET;
+
     return true;
 }
 
@@ -115,8 +125,19 @@ void VS1053::workerTaskFunc(void* p)
     {
         switch(dec->state)
         {
-            case INIT:
+            case HW_RESET:
+                dec->resetPin.setLow();
+                vTaskDelay(5);
+                dec->resetPin.setHigh();
+
+                dec->state = INIT;
+                break;
+
+            case SW_RESET:
                 controlRegSet(dec, MODE, 0x0002); /* Do a soft reset */
+                break;
+
+            case INIT:
                 controlRegWrite(dec, MODE, 0x0800, true); /* Set mode register */
                 setVolumeInternal(dec, 0x18); /* Set initial volume to -12dB */
 
@@ -158,7 +179,7 @@ void VS1053::workerTaskFunc(void* p)
 
                 if(!sendNextDataPacket(dec, &eof))
                 {
-                    dec->state = INIT;
+                    dec->state = SW_RESET;
                 }
                 else if(eof)
                 {
@@ -174,7 +195,7 @@ void VS1053::workerTaskFunc(void* p)
                 {
                     if(!sendNextDataPacket(dec, &eof))
                     {
-                        dec->state = INIT;
+                        dec->state = SW_RESET;
                     }
                     else if(eof)
                     {
@@ -184,7 +205,7 @@ void VS1053::workerTaskFunc(void* p)
 
                 if(i == 64)
                 {
-                    dec->state = INIT; /* SM_CANCEL stuck, do reset */
+                    dec->state = SW_RESET; /* SM_CANCEL stuck, do reset */
                 }
                 else if(dec->state == STOPPING) /* Ensure that we're still stopping */
                 {
@@ -226,7 +247,7 @@ void VS1053::workerTaskFunc(void* p)
 
                 if(i == 64)
                 {
-                    dec->state = INIT; /* SM_CANCEL stuck, do reset */
+                    dec->state = SW_RESET; /* SM_CANCEL stuck, do reset */
                 }
                 else
                 {
@@ -235,7 +256,7 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             default:
-                dec->state = INIT;
+                dec->state = SW_RESET;
                 break;
         }
     }
