@@ -19,6 +19,7 @@
 #define EVENT_WATCHDOG_KICK      (1 << 3)
 
 #define SM_CANCEL                (1 << 3)
+#define SS_DO_NOT_JUMP           (1 << 15)
 
 volatile uint32_t sm_state = 0;
 volatile uint32_t ndp_state = 0;
@@ -181,7 +182,11 @@ void VS1053::workerTaskFunc(void* p)
 
                     /* New file was selected by the user */
                     dec->bufferIndex  = 0;
-                    dec->fileBufferLen = 0;
+                    dec->bufferLen = 0;
+                    dec->fileReadBase = 0;
+                    dec->fileReadOffset = 0;
+                    dec->bytesToSend = 0;
+
                     dec->state = PLAYING;
                 }
                 break;
@@ -307,7 +312,7 @@ bool VS1053::play(const char* path)
     }
 
     stop();
-    //setPlayType(PLAY); /* Disable FF / Rew, if enabled */
+    setPlayType(PLAY); /* Disable FF / Rew, if enabled */
 
     /* Save the file */
     if(f_open(&currentFile, path, FA_READ) != FR_OK)
@@ -496,56 +501,120 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
 
     *eof = false;
 
-    if(dec->bufferIndex >= dec->fileBufferLen)
+    if(dec->currentPlayType != dec->requestedPlayType)
     {
-        dec->bufferIndex = 0;
-
-        ndp_state = 2;
-
-        /* Read more file data */
-        if(f_read(&(dec->currentFile), dec->fileBuffer, BUFFER_SIZE, (UINT*)(&(dec->fileBufferLen))) != FR_OK)
+        if((dec->requestedPlayType == FF) || (dec->requestedPlayType == REW))
         {
-            ndp_state = 3;
-            xEventGroupSetBits(dec->eventFlags, EVENT_WATCHDOG_KICK);
+            /* Check SS_DO_NOT_JUMP */
+            uint16_t status = controlRegRead(dec, STATUS, true);
 
-            f_close(&(dec->currentFile));
-            return false;
+            if(!(status & SS_DO_NOT_JUMP))
+            {
+                dec->currentPlayType = dec->requestedPlayType;
+            }
         }
-        else if(dec->fileBufferLen == 0)
+        else
         {
-            ndp_state = 4;
-
-            f_close(&(dec->currentFile));
-            *eof = true;
-            return true;
+            dec->currentPlayType = dec->requestedPlayType;
         }
     }
 
-    ndp_state = 5;
+    ndp_state = 2;
+
+    /* Do mode-specific operations */
+    switch(dec->currentPlayType)
+    {
+        case PLAY:
+            ndp_state = 8;
+            dec->fileReadBase += dec->fileReadOffset;
+            dec->fileReadOffset = 0;
+            break;
+
+        case PAUSE:
+            return true;
+
+        case FF:
+            if(dec->bytesToSend == 0)
+            {
+                /* Update byteRate */
+                dec->byteRate = getByteRate(dec);
+
+                /* Adjust read base */
+                dec->fileReadBase += dec->byteRate;
+                dec->fileReadOffset = 0;
+
+                /* Send 1/SEEK_SPEED seconds of audio to the decoder */
+                dec->bytesToSend = (uint32_t)(dec->byteRate) / SEEK_SPEED;
+            }
+            break;
+
+        case REW:
+            if(dec->bytesToSend == 0)
+            {
+            }
+            break;
+
+        default:
+            return false;
+    }
+
+    ndp_state = 3;
+
+    if(dec->bufferIndex >= dec->bufferLen)
+    {
+        dec->bufferIndex = 0;
+
+        /* Reposition read head */
+        if(f_lseek(&(dec->currentFile), dec->fileReadBase + dec->fileReadOffset) != FR_OK)
+        {
+            ndp_state = 6;
+
+            return false;
+        }
+
+        /* Refill buffer */
+        if(f_read(&(dec->currentFile), dec->fileBuffer, BUFFER_SIZE, (UINT*)(&(dec->bufferLen))) != FR_OK)
+        {
+            ndp_state = 7;
+
+            return false;
+        }
+        else if(dec->bufferLen == 0)
+        {
+            *eof = true;
+
+            return true;
+        }
+    }
 
     spi_cmd_t cmd;
 
     cmd.type = DATA;
     cmd.buffer = &(dec->fileBuffer[dec->bufferIndex]);
-    cmd.len = ((dec->fileBufferLen - dec->bufferIndex) > MAX_TRANSCEIVE_SIZE)
-            ? MAX_TRANSCEIVE_SIZE
-                    : (dec->fileBufferLen - dec->bufferIndex);
 
-    ndp_state = 6;
+    if((dec->bufferLen - dec->bufferIndex) > MAX_TRANSCEIVE_SIZE)
+    {
+        cmd.len = MAX_TRANSCEIVE_SIZE;
+    }
+    else
+    {
+        cmd.len = dec->bufferLen - dec->bufferIndex;
+    }
+
+    ndp_state = 4;
 
     xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
 
-    ndp_state = 7;
+    ndp_state = 5;
 
     transceive(dec, &cmd);
 
-    ndp_state = 8;
-
     xSemaphoreGive(LabSPI::bus_lock);
 
-    ndp_state = 9;
-
+    /* Update indexes */
     dec->bufferIndex += cmd.len;
+    dec->fileReadOffset += cmd.len;
+    dec->bytesToSend -= (dec->bytesToSend > cmd.len) ? cmd.len : dec->bytesToSend;
 
     return true;
 }
@@ -581,4 +650,24 @@ void VS1053::wdtTaskFunc(void* p)
             vTaskSuspend(NULL);
         }
     }
+}
+
+void VS1053::setPlayType(PLAY_TYPE t)
+{
+    requestedPlayType = t;
+}
+
+uint16_t VS1053::getByteRate(VS1053* dec)
+{
+    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+
+    /* Write address of byteRate to WRAMADDR */
+    controlRegWrite(dec, WRAMADDR, 0x1e05, false);
+
+    /* Read value at address */
+    uint16_t val = controlRegRead(dec, WRAM, false);
+
+    xSemaphoreGive(LabSPI::bus_lock);
+
+    return val;
 }

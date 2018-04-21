@@ -76,6 +76,7 @@ private:
     static const uint32_t SPI_START_FREQ_HZ = 1500000;
     static const uint32_t STACK_SIZE = 1024;
     static const uint32_t BUFFER_SIZE = 8192;
+    static const uint32_t SEEK_SPEED = 4; /* Speed multiplier for FF / Rew */
 
     /* From datasheet */
     typedef enum
@@ -132,14 +133,20 @@ private:
     LabGPIO controlCs;
     LabGPIO dataReq;
 
-    PLAY_TYPE playType = PLAY; /* Play, FF, or rewind */
+    PLAY_TYPE currentPlayType = PLAY; /* Play, FF, or rewind */
+    PLAY_TYPE requestedPlayType = PLAY;
 
     TaskHandle_t workerTask = NULL;
 
     FIL currentFile;
     uint8_t fileBuffer[BUFFER_SIZE];
-    uint32_t fileBufferLen = 0;
+    uint32_t bufferLen = 0;
     uint32_t bufferIndex = 0;
+    uint32_t fileReadBase = 0;
+    uint32_t fileReadOffset = 0;
+    uint32_t bytesToSend = 0;
+
+    uint16_t byteRate = 0;
 
     EventGroupHandle_t eventFlags = NULL;
 
@@ -163,6 +170,7 @@ private:
     static bool sendNextDataPacket(VS1053* dec, bool* eof);
 
     static uint8_t getEndFillByte(VS1053* dec);
+    static uint16_t getByteRate(VS1053* dec);
 };
 
 #endif

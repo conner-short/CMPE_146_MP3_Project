@@ -16,7 +16,9 @@ void vDebugTask(void* p)
         dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\02_-_Moar_Ghosts_\'n\'_Stuff.mp3");
         vTaskDelay(20000);
         dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\03_-_Ghosts_n_Stuff_(feat._Rob_Swire).mp3");
-        vTaskDelay(20000);
+        vTaskDelay(10000);
+        dec->setPlayType(VS1053::FF);
+        vTaskDelay(10000);
         dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\04_-_Hi_Friend!.mp3");
         vTaskDelay(20000);
         dec->play("1:\\Music\\deadmau5\\For_Lack_of_a_Better_Name\\05_-_Bot.mp3");
@@ -40,16 +42,6 @@ int main(void) {
     VS1053::pin_t dreq = {2, 5};
     VS1053::pin_t control_cs = {2, 6};
     VS1053::pin_t data_cs = {2, 7};
-
-    if(!spi.init(LabSPI::SSP1, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, 8))
-    {
-        uart0_puts("Failed to initialize SSP1");
-
-        while(1)
-        {
-            ;
-        }
-    }
 
     if(!mp3Decoder.init(LabSPI::SSP0, reset, data_cs, control_cs, dreq))
     {
