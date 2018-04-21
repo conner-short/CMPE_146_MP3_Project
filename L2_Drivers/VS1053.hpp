@@ -19,7 +19,7 @@ public:
     VS1053();
     ~VS1053();
 
-    typedef enum {PLAY, FF, REW} PLAY_TYPE;
+    typedef enum {PLAY, PAUSE, FF, REW} PLAY_TYPE;
 
     typedef struct
     {
@@ -47,11 +47,6 @@ public:
      * @return Returns true on success, false otherwise
      */
     bool play(const char* path);
-
-    /**
-     * Pauses the current file if playing
-     */
-    void pause(void);
 
     /**
      * Stops the current file
@@ -151,6 +146,7 @@ private:
     static void handleDataReqIsr(void* p);
 
     static void workerTaskFunc(void* p);
+    static void wdtTaskFunc(void* p);
 
     static uint16_t controlRegRead(VS1053* dec, control_reg_t reg, bool acquireBus);
     static void controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus);
