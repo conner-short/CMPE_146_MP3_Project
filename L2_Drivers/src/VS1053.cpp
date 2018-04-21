@@ -135,6 +135,8 @@ void VS1053::workerTaskFunc(void* p)
 
             case SW_RESET:
                 controlRegSet(dec, MODE, 0x0002); /* Do a soft reset */
+
+                dec->state = INIT;
                 break;
 
             case INIT:
