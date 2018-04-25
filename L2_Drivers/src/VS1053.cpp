@@ -130,10 +130,7 @@ void VS1053::workerTaskFunc(void* p)
     VS1053* dec = (VS1053*)p;
 
     bool eof;
-    uint8_t end_fill_byte;
-    uint32_t i, j; /* Loop counters */
-
-    spi_cmd_t cmd;
+    uint32_t i; /* Loop counter */
 
     while(1)
     {
@@ -183,13 +180,16 @@ void VS1053::workerTaskFunc(void* p)
                 {
                     sm_state = 5;
 
-                    /* New file was selected by the user */
+                    /* New file was selected, reset variables */
+
                     dec->bufferIndex  = 0;
                     dec->bufferLen = 0;
                     dec->fileReadBase = 0;
                     dec->fileReadOffset = 0;
                     dec->bytesToSend = 0;
                     dec->paused = false;
+
+                    xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE | EVENT_RESUME);
 
                     dec->state = PLAYING;
                 }
@@ -207,8 +207,6 @@ void VS1053::workerTaskFunc(void* p)
                     /* Set SM_CANCEL bit in MODE register */
                     controlRegSet(dec, MODE, SM_CANCEL);
 
-                    end_fill_byte = getEndFillByte(dec);
-
                     dec->state = STOPPING;
                     break;
                 }
@@ -224,7 +222,6 @@ void VS1053::workerTaskFunc(void* p)
                     sm_state = 9;
 
                     controlRegSet(dec, MODE, SM_CANCEL);
-                    end_fill_byte = getEndFillByte(dec);
                     dec->state = ENDING;
                 }
                 break;
@@ -251,20 +248,7 @@ void VS1053::workerTaskFunc(void* p)
                 }
                 else if(dec->state == STOPPING) /* Ensure that we're still stopping */
                 {
-                    cmd.type = DATA;
-                    cmd.buffer = &end_fill_byte;
-                    cmd.len = 1;
-
-                    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
-
-                    /* Send 2052 of endFillByte */
-                    for(i = 0; i < 2052; i++)
-                    {
-                        transceive(dec, &cmd);
-                    }
-
-                    xSemaphoreGive(LabSPI::bus_lock);
-
+                    sendEndFillByte(dec, 2052); /* Send 2052 of endFillByte */
                     dec->state = IDLE; /* Stopped, return to idle */
                 }
                 break;
@@ -272,21 +256,10 @@ void VS1053::workerTaskFunc(void* p)
             case ENDING:
                 sm_state = 11;
 
-                cmd.type = DATA;
-                cmd.buffer = &end_fill_byte;
-                cmd.len = 1;
-
                 /* Send 2048 of endFillByte (32 at a time) and wait for SM_CANCEL to clear */
                 for(i = 0; (i < 64) && (controlRegRead(dec, MODE, true) & SM_CANCEL); i++)
                 {
-                    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
-
-                    for(j = 0; j < 32; j++)
-                    {
-                        transceive(dec, &cmd);
-                    }
-
-                    xSemaphoreGive(LabSPI::bus_lock);
+                    sendEndFillByte(dec, 32);
                 }
 
                 if(i == 64)
@@ -567,6 +540,10 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
                 dec->fileReadBase += dec->byteRate;
                 dec->fileReadOffset = 0;
 
+                /* Send 2048 bytes of endFillByte to let the decoder prepare to skip
+                 * around */
+                sendEndFillByte(dec, 2048);
+
                 /* Send 1/SEEK_SPEED seconds of audio to the decoder */
                 dec->bytesToSend = (uint32_t)(dec->byteRate) / SEEK_SPEED;
             }
@@ -575,6 +552,17 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         case REW:
             if(dec->bytesToSend == 0)
             {
+                /* Pretty much the same as fast-forwarding, just in reverse */
+
+                dec->byteRate = getByteRate(dec);
+
+                /* Mind the potential subtraction underflow */
+                dec->fileReadBase -= (dec->fileReadBase > dec->byteRate) ? dec->byteRate : 0;
+                dec->fileReadOffset = 0;
+
+                sendEndFillByte(dec, 2048);
+
+                dec->bytesToSend = (uint32_t)(dec->byteRate) / SEEK_SPEED;
             }
             break;
 
@@ -709,4 +697,23 @@ void VS1053::resume(void)
     {
         xEventGroupSetBits(eventFlags, EVENT_RESUME);
     }
+}
+
+void VS1053::sendEndFillByte(VS1053* dec, uint32_t count)
+{
+    uint8_t endFillByte = getEndFillByte(dec);
+
+    spi_cmd_t cmd;
+    cmd.type = DATA;
+    cmd.buffer = &endFillByte;
+    cmd.len = 1;
+
+    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+
+    for(uint32_t i = 0; i < count; i++)
+    {
+        transceive(dec, &cmd);
+    }
+
+    xSemaphoreGive(LabSPI::bus_lock);
 }

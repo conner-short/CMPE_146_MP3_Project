@@ -183,6 +183,8 @@ private:
 
     static uint8_t getEndFillByte(VS1053* dec);
     static uint16_t getByteRate(VS1053* dec);
+
+    static void sendEndFillByte(VS1053* dec, uint32_t count);
 };
 
 #endif

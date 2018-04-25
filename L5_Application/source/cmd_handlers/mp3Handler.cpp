@@ -49,6 +49,10 @@ CMD_HANDLER_FUNC(mp3Handler) {
     {
         mp3CmdDec->setPlayType(VS1053::FF);
     }
+    else if(strncmp(op, "rew", strlen("rew")) == 0)
+    {
+        mp3CmdDec->setPlayType(VS1053::REW);
+    }
     else
     {
         return false;
