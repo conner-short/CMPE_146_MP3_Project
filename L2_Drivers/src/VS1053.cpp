@@ -15,8 +15,10 @@
 
 #define EVENT_NEW_FILE_SELECTED  (1 << 0)
 #define EVENT_DREQ_HIGH          (1 << 1)
-#define EVENT_STOP_REQUESTED     (1 << 2)
+#define EVENT_STOP               (1 << 2)
 #define EVENT_WATCHDOG_KICK      (1 << 3)
+#define EVENT_PAUSE              (1 << 4)
+#define EVENT_RESUME             (1 << 5)
 
 #define SM_CANCEL                (1 << 3)
 #define SS_DO_NOT_JUMP           (1 << 15)
@@ -84,7 +86,7 @@ bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, 
         return false;
     }
 
-    if(xTaskCreate(wdtTaskFunc, "WDT", STACK_SIZE, this, 1, NULL) != pdPASS)
+    if(xTaskCreate(wdtTaskFunc, "WDT", STACK_SIZE, this, 3, NULL) != pdPASS)
     {
         return false;
     }
@@ -149,6 +151,7 @@ void VS1053::workerTaskFunc(void* p)
 
             case SW_RESET:
                 sm_state = 2;
+                uart0_puts("soft reset");
 
                 controlRegSet(dec, MODE, 0x0002); /* Do a soft reset */
 
@@ -186,6 +189,7 @@ void VS1053::workerTaskFunc(void* p)
                     dec->fileReadBase = 0;
                     dec->fileReadOffset = 0;
                     dec->bytesToSend = 0;
+                    dec->paused = false;
 
                     dec->state = PLAYING;
                 }
@@ -194,11 +198,11 @@ void VS1053::workerTaskFunc(void* p)
             case PLAYING:
                 sm_state = 6;
 
-                if(xEventGroupGetBits(dec->eventFlags) & EVENT_STOP_REQUESTED)
+                if(xEventGroupGetBits(dec->eventFlags) & EVENT_STOP)
                 {
                     sm_state = 7;
 
-                    xEventGroupClearBits(dec->eventFlags, EVENT_STOP_REQUESTED);
+                    xEventGroupClearBits(dec->eventFlags, EVENT_STOP);
 
                     /* Set SM_CANCEL bit in MODE register */
                     controlRegSet(dec, MODE, SM_CANCEL);
@@ -330,7 +334,7 @@ void VS1053::stop()
 {
     if(state == PLAYING)
     {
-        xEventGroupSetBits(eventFlags, EVENT_STOP_REQUESTED);
+        xEventGroupSetBits(eventFlags, EVENT_STOP);
     }
 }
 
@@ -499,6 +503,29 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
 
     ndp_state = 1;
 
+    if(xEventGroupGetBits(dec->eventFlags) & EVENT_PAUSE)
+    {
+        ndp_state = 16;
+
+        xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE);
+
+        dec->paused = true;
+
+        EventBits_t bits = xEventGroupWaitBits(dec->eventFlags,
+                EVENT_RESUME | EVENT_STOP, pdTRUE, pdFALSE, portMAX_DELAY);
+
+        ndp_state = 17;
+
+        dec->paused = false;
+
+        if(bits & EVENT_STOP)
+        {
+            ndp_state = 18;
+            /* Don't play anything else; just return so the stop handling can begin */
+            return true;
+        }
+    }
+
     *eof = false;
 
     if(dec->currentPlayType != dec->requestedPlayType)
@@ -529,9 +556,6 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
             dec->fileReadBase += dec->fileReadOffset;
             dec->fileReadOffset = 0;
             break;
-
-        case PAUSE:
-            return true;
 
         case FF:
             if(dec->bytesToSend == 0)
@@ -642,12 +666,11 @@ void VS1053::wdtTaskFunc(void* p)
 
     while(1)
     {
-        bits = xEventGroupWaitBits(dec->eventFlags, EVENT_WATCHDOG_KICK, pdTRUE, pdTRUE, 1000);
+        bits = xEventGroupWaitBits(dec->eventFlags, EVENT_WATCHDOG_KICK, pdTRUE, pdTRUE, 10000);
 
-        if(!(bits & EVENT_WATCHDOG_KICK))
+        if((!(bits & EVENT_WATCHDOG_KICK)) && (dec->state == PLAYING))
         {
-            printf("STALL: ndp_state = %lu, sm_state = %lu", ndp_state, sm_state);
-            vTaskSuspend(NULL);
+            printf("STALL: ndp_state = %lu, sm_state = %lu\n", ndp_state, sm_state);
         }
     }
 }
@@ -670,4 +693,20 @@ uint16_t VS1053::getByteRate(VS1053* dec)
     xSemaphoreGive(LabSPI::bus_lock);
 
     return val;
+}
+
+void VS1053::pause(void)
+{
+    if(!paused)
+    {
+        xEventGroupSetBits(eventFlags, EVENT_PAUSE);
+    }
+}
+
+void VS1053::resume(void)
+{
+    if(paused)
+    {
+        xEventGroupSetBits(eventFlags, EVENT_RESUME);
+    }
 }

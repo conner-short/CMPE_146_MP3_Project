@@ -19,7 +19,7 @@ public:
     VS1053();
     ~VS1053();
 
-    typedef enum {PLAY, PAUSE, FF, REW} PLAY_TYPE;
+    typedef enum {PLAY, FF, REW} PLAY_TYPE;
 
     typedef struct
     {
@@ -49,6 +49,16 @@ public:
     bool play(const char* path);
 
     /**
+     * Pauses the current file
+     */
+    void pause(void);
+
+    /**
+     * Resumes playback of a paused file
+     */
+    void resume(void);
+
+    /**
      * Stops the current file
      */
     void stop(void);
@@ -75,7 +85,7 @@ private:
     static const uint32_t SPI_FREQ_HZ = 7899000;
     static const uint32_t SPI_START_FREQ_HZ = 1500000;
     static const uint32_t STACK_SIZE = 1024;
-    static const uint32_t BUFFER_SIZE = 8192;
+    static const uint32_t BUFFER_SIZE = 1024;
     static const uint32_t SEEK_SPEED = 4; /* Speed multiplier for FF / Rew */
 
     /* From datasheet */
@@ -149,6 +159,8 @@ private:
     uint16_t byteRate = 0;
 
     EventGroupHandle_t eventFlags = NULL;
+
+    bool paused = false;
 
     static void handleDataReqIsr(void* p);
 
