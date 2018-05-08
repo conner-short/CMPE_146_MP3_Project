@@ -1,7 +1,11 @@
+#include <stdio.h>
+
 #include "core_cm3.h"
 #include "lpc_isr.h"
 #include "SPIController.hpp"
 #include "sys_config.h"
+
+SPIController::task_state_t SPIController::ssp0_state, SPIController::ssp1_state;
 
 SPIController::SPIController(void)
 {
@@ -38,7 +42,7 @@ bool SPIController::calcDividerSettings(uint32_t pclk_hz, uint32_t sck_freq_hz, 
      * frequency */
     for(uint32_t i = 2; i < 256; i += 2)
     {
-        for(uint32_t j = 1; j < 256; j++)
+        for(uint32_t j = 1; j <= 1/*256*/; j++)
         {
             uint32_t sck_gen_hz = pclk_hz / (i * j);
 
@@ -65,6 +69,41 @@ bool SPIController::calcDividerSettings(uint32_t pclk_hz, uint32_t sck_freq_hz, 
     /* Otherwise, return the closest match possible */
     *cpsdvsr = _cpsdvsr;
     *scr = _scr_plus_1 - 1;
+    return true;
+}
+
+bool SPIController::setSckFreq(ssp_t ssp, uint32_t sck_freq_hz)
+{
+    task_state_t* state;
+
+    switch(ssp)
+    {
+        case SSP0: state = &ssp0_state; break;
+        case SSP1: state = &ssp1_state; break;
+        default: return false;
+    }
+
+    if(state->task == NULL)
+    {
+        return false;
+    }
+
+    uint8_t cpsdvsr, scr;
+    uint32_t pclk = sys_get_cpu_clock();
+
+    if(!calcDividerSettings(pclk, sck_freq_hz, &cpsdvsr, &scr))
+    {
+        return false;
+    }
+
+    state->ssp->CR1 &= 0xD; /* Disable the SSP, if enabled, before adjusting settings */
+    xQueueReset(state->queue);
+
+    state->ssp->CR0 &= 0xFF;
+    state->ssp->CR0 |= (scr << 8);
+    state->ssp->CPSR = (uint32_t)cpsdvsr;
+
+    state->ssp->CR1 |= 0x2; /* Enable the SSP */
 
     return true;
 }
@@ -94,100 +133,125 @@ bool SPIController::init(ssp_t ssp, frame_format_t ff, uint32_t sck_freq_hz)
 
     cr0 |= (scr << 8);
 
+    task_state_t* state;
+
+    /* Power and clock */
     switch(ssp)
     {
         case SSP0:
+            state = &ssp0_state;
+
             LPC_SC->PCONP |= (1 << 21); /* Power */
 
             LPC_SC->PCLKSEL1 &= ~(3 << 10); /* PCLK = CCLK */
             LPC_SC->PCLKSEL1 |=  (1 << 10);
-
-            if(ssp0_state.task == NULL)
-            {
-                /* Create the queue */
-                ssp0_state.queue = xQueueCreate(8, sizeof(spi_msg_t));
-
-                if(ssp0_state.queue == NULL)
-                {
-                    LPC_SC->PCONP &= ~(1 << 21);
-                    return false;
-                }
-
-                /* Start the controller task */
-                if(xTaskCreate(SSP0ControllerTask, "SSP0", STACK_DEPTH, NULL, 3, &(ssp0_state.task)) != pdPASS)
-                {
-                    LPC_SC->PCONP &= ~(1 << 21);
-                    return false;
-                }
-            }
-            else
-            {
-                /* Reset the existing task (clear its queue) */
-                xQueueReset(ssp0_state.queue);
-            }
-
-            /* Disable all interrupts */
-            ssp0_state.ssp->IMSC = 0x0;
-
-            /* Register interrupt handler */
-            isr_register(SSP0_IRQn, SSP0ISR);
-            NVIC_EnableIRQ(SSP0_IRQn);
-
-            ssp0_state.ssp->CR0  = cr0;
-            ssp0_state.ssp->CPSR = (uint32_t)cpsdvsr;
-
-            ssp0_state.ssp->CR1  = 0x2; /* Enable the SSP */
-
-            xEventGroupSetBits(ssp0_state.ev, EVENT_HW_READY);
             break;
 
         case SSP1:
+            state = &ssp1_state;
+
             LPC_SC->PCONP |= (1 << 10);
 
             LPC_SC->PCLKSEL0 &= ~(3 << 20);
             LPC_SC->PCLKSEL0 |=  (1 << 20);
-
-            if(ssp1_state.task == NULL)
-            {
-                /* Create the queue */
-                ssp1_state.queue = xQueueCreate(8, sizeof(spi_msg_t));
-
-                if(ssp1_state.queue == NULL)
-                {
-                    LPC_SC->PCONP &= ~(1 << 10);
-                    return false;
-                }
-
-                /* Start the controller task */
-                if(xTaskCreate(SSP1ControllerTask, "SSP1", STACK_DEPTH, NULL, 3, &(ssp1_state.task)) != pdPASS)
-                {
-                    LPC_SC->PCONP &= ~(1 << 10);
-                    return false;
-                }
-            }
-            else
-            {
-                /* Reset the existing task (clear its queue) */
-                xQueueReset(ssp1_state.queue);
-            }
-
-            /* Disable all interrupts */
-            ssp1_state.ssp->IMSC = 0x0;
-
-            /* Register interrupt handler */
-            isr_register(SSP1_IRQn, SSP0ISR);
-            NVIC_EnableIRQ(SSP1_IRQn);
-
-            ssp1_state.ssp->CR0  = cr0;
-            ssp1_state.ssp->CPSR = (uint32_t)cpsdvsr;
-
-            ssp1_state.ssp->CR1  = 0x2; /* Enable the SSP */
-
-            xEventGroupSetBits(ssp1_state.ev, EVENT_HW_READY);
             break;
 
         default: return false;
     }
+
+    state->ssp->CR1 &= 0xD; /* Disable the SSP, if enabled, before adjusting settings */
+
+    if(state->task == NULL)
+    {
+        /* Create the queue */
+        state->queue = xQueueCreate(8, sizeof(spi_msg_t));
+
+        if(state->queue == NULL)
+        {
+            switch(ssp)
+            {
+                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
+                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
+                default: return false;
+            }
+        }
+
+        /* Create event group */
+        state->ev = xEventGroupCreate();
+
+        if(state->ev == NULL)
+        {
+            switch(ssp)
+            {
+                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
+                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
+                default: return false;
+            }
+        }
+
+        /* Create SSP mutex */
+        state->mutex = xSemaphoreCreateMutex();
+
+        if(state->mutex == NULL)
+        {
+            switch(ssp)
+            {
+                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
+                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
+                default: return false;
+            }
+        }
+
+        BaseType_t res;
+
+        /* Start controller task */
+        switch(ssp)
+        {
+            case SSP0: res = xTaskCreate(SSP0ControllerTask, "SSP0", STACK_DEPTH, NULL, 3, &(state->task)); break;
+            case SSP1: res = xTaskCreate(SSP1ControllerTask, "SSP1", STACK_DEPTH, NULL, 3, &(state->task)); break;
+            default: return false;
+        }
+
+        if(res != pdPASS)
+        {
+            switch(ssp)
+            {
+                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
+                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
+                default: return false;
+            }
+        }
+    }
+    else
+    {
+        /* Reset the existing task (clear its queue) */
+        xQueueReset(state->queue);
+    }
+
+    /* Disable all interrupts */
+    state->ssp->IMSC = 0x0;
+
+    /* Register interrupt handler */
+    switch(ssp)
+    {
+        case SSP0:
+            isr_register(SSP0_IRQn, SSP0ISR);
+            NVIC_EnableIRQ(SSP0_IRQn);
+            break;
+
+        case SSP1:
+            isr_register(SSP1_IRQn, SSP1ISR);
+            NVIC_EnableIRQ(SSP1_IRQn);
+            break;
+
+        default: return false;
+    }
+
+    state->ssp->CR0  = cr0;
+    state->ssp->CPSR = (uint32_t)cpsdvsr;
+    state->ssp->CR1  = 0x2; /* Enable the SSP */
+
+    xEventGroupSetBits(state->ev, EVENT_HW_READY);
 
     return true;
 }
@@ -215,8 +279,8 @@ void SPIController::controllerTask(task_state_t* state)
         state->rx_i = 0;
         state->tx_i = 0;
 
-        enableTxInterrupts(state->ssp);
         enableRxInterrupts(state->ssp);
+        enableTxInterrupts(state->ssp);
 
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 

@@ -16,25 +16,29 @@
 #define EVENT_NEW_FILE_SELECTED  (1 << 0)
 #define EVENT_DREQ_HIGH          (1 << 1)
 #define EVENT_STOP               (1 << 2)
-#define EVENT_WATCHDOG_KICK      (1 << 3)
+//#define EVENT_WATCHDOG_KICK      (1 << 3)
 #define EVENT_PAUSE              (1 << 4)
 #define EVENT_RESUME             (1 << 5)
 
 #define SM_CANCEL                (1 << 3)
 #define SS_DO_NOT_JUMP           (1 << 15)
 
-volatile uint32_t sm_state = 0;
-volatile uint32_t ndp_state = 0;
+//volatile uint32_t sm_state = 0;
+//volatile uint32_t ndp_state = 0;
 
 VS1053::VS1053() {}
 VS1053::~VS1053() {}
 
-bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, pin_t& control_cs, pin_t& dreq)
+bool VS1053::init(SPIController::ssp_t ssp, pin_t& reset, pin_t& data_cs, pin_t& control_cs, pin_t& dreq)
 {
-    spiDev = spi_channel;
+    mSSP = ssp;
 
-    /* SPI init with low startup speed */
-    if(!spi.init(spiDev, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, getSpiDivider(false)))
+    if(!dataDev.init(ssp, data_cs, SPIController::IDLE_LOW_CAPTURE_RISING, SPI_FREQ_HZ))
+    {
+        return false;
+    }
+
+    if(!controlDev.init(ssp, control_cs, SPIController::IDLE_LOW_CAPTURE_RISING, SPI_FREQ_HZ))
     {
         return false;
     }
@@ -48,22 +52,6 @@ bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, 
 
     resetPin.setAsOutput();
     resetPin.setLow();
-
-    if(!dataCs.init(data_cs.port, data_cs.pin))
-    {
-        return false;
-    }
-
-    dataCs.setAsOutput();
-    dataCs.setHigh();
-
-    if(!controlCs.init(control_cs.port, control_cs.pin))
-    {
-        return false;
-    }
-
-    controlCs.setAsOutput();
-    controlCs.setHigh();
 
     if(!dataReq.init(dreq.port, dreq.pin))
     {
@@ -86,10 +74,10 @@ bool VS1053::init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, 
         return false;
     }
 
-    if(xTaskCreate(wdtTaskFunc, "WDT", STACK_SIZE, this, 3, NULL) != pdPASS)
-    {
-        return false;
-    }
+//    if(xTaskCreate(wdtTaskFunc, "WDT", STACK_SIZE, this, 3, NULL) != pdPASS)
+//    {
+//        return false;
+//    }
 
     /* Configure data request interrupt */
 
@@ -137,7 +125,7 @@ void VS1053::workerTaskFunc(void* p)
         switch(dec->state)
         {
             case HW_RESET:
-                sm_state = 1;
+//                sm_state = 1;
 
                 dec->resetPin.setLow();
                 vTaskDelay(5);
@@ -147,8 +135,7 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             case SW_RESET:
-                sm_state = 2;
-                uart0_puts("soft reset");
+//                sm_state = 2;
 
                 controlRegSet(dec, MODE, 0x0002); /* Do a soft reset */
 
@@ -156,7 +143,7 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             case INIT:
-                sm_state = 3;
+//                sm_state = 3;
 
                 controlRegWrite(dec, MODE, 0x0800, true); /* Set mode register */
                 setVolumeInternal(dec, 0x18); /* Set initial volume to -12dB */
@@ -164,21 +151,15 @@ void VS1053::workerTaskFunc(void* p)
                 controlRegWrite(dec, CLOCKF, 0xc000, true); /* Set clock control register */
                 waitForDReq(dec); /* Wait for clock to settle */
 
-                /* Bump SPI speed up after clock has settled */
-                if(!spi.init(dec->spiDev, 8, LabSPI::IDLE_LOW_CAPTURE_RISING, getSpiDivider(true)))
-                {
-                    break;
-                }
-
                 dec->state = IDLE;
                 break;
 
             case IDLE:
-                sm_state = 4;
+//                sm_state = 4;
 
                 if(xEventGroupWaitBits(dec->eventFlags, EVENT_NEW_FILE_SELECTED, pdTRUE, pdTRUE, portMAX_DELAY))
                 {
-                    sm_state = 5;
+//                    sm_state = 5;
 
                     /* New file was selected, reset variables */
 
@@ -196,11 +177,11 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             case PLAYING:
-                sm_state = 6;
+//                sm_state = 6;
 
                 if(xEventGroupGetBits(dec->eventFlags) & EVENT_STOP)
                 {
-                    sm_state = 7;
+//                    sm_state = 7;
 
                     xEventGroupClearBits(dec->eventFlags, EVENT_STOP);
 
@@ -213,13 +194,13 @@ void VS1053::workerTaskFunc(void* p)
 
                 if(!sendNextDataPacket(dec, &eof))
                 {
-                    sm_state = 8;
+//                    sm_state = 8;
 
                     dec->state = SW_RESET;
                 }
                 else if(eof)
                 {
-                    sm_state = 9;
+//                    sm_state = 9;
 
                     controlRegSet(dec, MODE, SM_CANCEL);
                     dec->state = ENDING;
@@ -227,7 +208,7 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             case STOPPING:
-                sm_state = 10;
+//                sm_state = 10;
 
                 /* Send 2048 more bytes of file and wait for SM_CANCEL to clear */
                 for(i = 0; (i < 64) && (controlRegRead(dec, MODE, true) & SM_CANCEL); i++)
@@ -254,7 +235,7 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             case ENDING:
-                sm_state = 11;
+//                sm_state = 11;
 
                 /* Send 2048 of endFillByte (32 at a time) and wait for SM_CANCEL to clear */
                 for(i = 0; (i < 64) && (controlRegRead(dec, MODE, true) & SM_CANCEL); i++)
@@ -273,7 +254,7 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             default:
-                sm_state = 12;
+//                sm_state = 12;
 
                 dec->state = SW_RESET;
                 break;
@@ -325,22 +306,17 @@ uint16_t VS1053::controlRegRead(VS1053* dec, control_reg_t reg, bool acquireBus)
     cmd_buffer[2] = 0x00;
     cmd_buffer[3] = 0x00;
 
-    spi_cmd_t cmd;
-
-    cmd.type = CMD;
-    cmd.buffer = cmd_buffer;
-    cmd.len = 4;
-
     if(acquireBus)
     {
-        xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+        dec->controlDev.acquire();
     }
 
-    transceive(dec, &cmd);
+    waitForDReq(dec);
+    dec->controlDev.transceive(cmd_buffer, 4);
 
     if(acquireBus)
     {
-        xSemaphoreGive(LabSPI::bus_lock);
+        dec->controlDev.release();
     }
 
     return ((((uint16_t)cmd_buffer[2]) << 8) | ((uint16_t)cmd_buffer[3]));
@@ -355,22 +331,17 @@ void VS1053::controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool 
     cmd_buffer[2] = (uint8_t)(val >> 8);
     cmd_buffer[3] = (uint8_t)(val);
 
-    spi_cmd_t cmd;
-
-    cmd.type = CMD;
-    cmd.buffer = cmd_buffer;
-    cmd.len = 4;
-
     if(acquireBus)
     {
-        xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+        dec->controlDev.acquire();
     }
 
-    transceive(dec, &cmd);
+    waitForDReq(dec);
+    dec->controlDev.transceive(cmd_buffer, 4);
 
     if(acquireBus)
     {
-        xSemaphoreGive(LabSPI::bus_lock);
+        dec->controlDev.release();
     }
 }
 
@@ -378,7 +349,7 @@ void VS1053::controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits)
 {
     uint16_t val;
 
-    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+    dec->controlDev.acquire();
 
     val = controlRegRead(dec, reg, false);
 
@@ -386,14 +357,14 @@ void VS1053::controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits)
 
     controlRegWrite(dec, reg, val, false);
 
-    xSemaphoreGive(LabSPI::bus_lock);
+    dec->controlDev.release();
 }
 
 void VS1053::controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits)
 {
     uint16_t val;
 
-    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+    dec->controlDev.acquire();
 
     val = controlRegRead(dec, reg, false);
 
@@ -401,84 +372,29 @@ void VS1053::controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits)
 
     controlRegWrite(dec, reg, val, false);
 
-    xSemaphoreGive(LabSPI::bus_lock);
-}
-
-/* SPI bus lock must be acquired before entering this function */
-void VS1053::transceive(VS1053* dec, spi_cmd_t* cmd)
-{
-    ndp_state = 10;
-
-    waitForDReq(dec);
-
-    ndp_state = 11;
-
-    /* Select chip */
-    switch(cmd->type)
-    {
-        case DATA:
-            dec->dataCs.setLow();
-            break;
-
-        case CMD:
-            dec->controlCs.setLow();
-            break;
-    }
-
-    ndp_state = 12;
-
-    /* Transfer bytes */
-    for(uint32_t i = 0; i < cmd->len; i++)
-    {
-        cmd->buffer[i] = spi.transfer(cmd->buffer[i]);
-    }
-
-    ndp_state = 13;
-
-    /* Deselect chip */
-    switch(cmd->type)
-    {
-        case DATA:
-            dec->dataCs.setHigh();
-            break;
-
-        case CMD:
-            dec->controlCs.setHigh();
-            break;
-    }
+    dec->controlDev.release();
 }
 
 void VS1053::waitForDReq(VS1053* dec) {
-    ndp_state = 14;
+//    ndp_state = 14;
 
     if(!(dec->dataReq.getLevel()))
     {
-        ndp_state = 15;
+//        ndp_state = 15;
 
         xEventGroupWaitBits(dec->eventFlags, EVENT_DREQ_HIGH, pdTRUE, pdTRUE, portMAX_DELAY);
     }
 }
 
-uint8_t VS1053::getSpiDivider(bool speed)
-{
-    uint8_t res = (uint8_t)(sys_get_cpu_clock() / (speed ? SPI_FREQ_HZ : SPI_START_FREQ_HZ));
-    if(res & 1)
-    {
-        res += 1;
-    }
-
-    return res;
-}
-
 bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
 {
-    xEventGroupSetBits(dec->eventFlags, EVENT_WATCHDOG_KICK);
+//    xEventGroupSetBits(dec->eventFlags, EVENT_WATCHDOG_KICK);
 
-    ndp_state = 1;
+//    ndp_state = 1;
 
     if(xEventGroupGetBits(dec->eventFlags) & EVENT_PAUSE)
     {
-        ndp_state = 16;
+//        ndp_state = 16;
 
         xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE);
 
@@ -487,13 +403,13 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         EventBits_t bits = xEventGroupWaitBits(dec->eventFlags,
                 EVENT_RESUME | EVENT_STOP, pdTRUE, pdFALSE, portMAX_DELAY);
 
-        ndp_state = 17;
+//        ndp_state = 17;
 
         dec->paused = false;
 
         if(bits & EVENT_STOP)
         {
-            ndp_state = 18;
+//            ndp_state = 18;
             /* Don't play anything else; just return so the stop handling can begin */
             return true;
         }
@@ -519,13 +435,13 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         }
     }
 
-    ndp_state = 2;
+//    ndp_state = 2;
 
     /* Do mode-specific operations */
     switch(dec->currentPlayType)
     {
         case PLAY:
-            ndp_state = 8;
+//            ndp_state = 8;
             dec->fileReadBase += dec->fileReadOffset;
             dec->fileReadOffset = 0;
             break;
@@ -570,7 +486,7 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
             return false;
     }
 
-    ndp_state = 3;
+//    ndp_state = 3;
 
     if(dec->bufferIndex >= dec->bufferLen)
     {
@@ -579,7 +495,7 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         /* Reposition read head */
         if(f_lseek(&(dec->currentFile), dec->fileReadBase + dec->fileReadOffset) != FR_OK)
         {
-            ndp_state = 6;
+//            ndp_state = 6;
 
             return false;
         }
@@ -587,7 +503,7 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         /* Refill buffer */
         if(f_read(&(dec->currentFile), dec->fileBuffer, BUFFER_SIZE, (UINT*)(&(dec->bufferLen))) != FR_OK)
         {
-            ndp_state = 7;
+//            ndp_state = 7;
 
             return false;
         }
@@ -599,41 +515,28 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         }
     }
 
-    spi_cmd_t cmd;
+    uint8_t* buf = &(dec->fileBuffer[dec->bufferIndex]);
+    uint32_t len = ((dec->bufferLen - dec->bufferIndex) > MAX_TRANSCEIVE_SIZE) ?
+            MAX_TRANSCEIVE_SIZE : dec->bufferLen - dec->bufferIndex;
 
-    cmd.type = DATA;
-    cmd.buffer = &(dec->fileBuffer[dec->bufferIndex]);
-
-    if((dec->bufferLen - dec->bufferIndex) > MAX_TRANSCEIVE_SIZE)
-    {
-        cmd.len = MAX_TRANSCEIVE_SIZE;
-    }
-    else
-    {
-        cmd.len = dec->bufferLen - dec->bufferIndex;
-    }
-
-    ndp_state = 4;
-
-    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
-
-    ndp_state = 5;
-
-    transceive(dec, &cmd);
-
-    xSemaphoreGive(LabSPI::bus_lock);
+    dec->dataDev.acquire();
+    waitForDReq(dec);
+//    ndp_state = 19;
+    dec->dataDev.transceive(buf, len);
+//    ndp_state = 20;
+    dec->dataDev.release();
 
     /* Update indexes */
-    dec->bufferIndex += cmd.len;
-    dec->fileReadOffset += cmd.len;
-    dec->bytesToSend -= (dec->bytesToSend > cmd.len) ? cmd.len : dec->bytesToSend;
+    dec->bufferIndex += len;
+    dec->fileReadOffset += len;
+    dec->bytesToSend -= (dec->bytesToSend > len) ? len : dec->bytesToSend;
 
     return true;
 }
 
 uint8_t VS1053::getEndFillByte(VS1053* dec)
 {
-    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+    dec->controlDev.acquire();
 
     /* Write address of endFillByte to WRAMADDR */
     controlRegWrite(dec, WRAMADDR, 0x1e06, false);
@@ -641,27 +544,27 @@ uint8_t VS1053::getEndFillByte(VS1053* dec)
     /* Read value at address */
     uint16_t val = controlRegRead(dec, WRAM, false);
 
-    xSemaphoreGive(LabSPI::bus_lock);
+    dec->controlDev.release();
 
     return (uint8_t)val;
 }
 
-void VS1053::wdtTaskFunc(void* p)
-{
-    VS1053* dec = (VS1053*)p;
-
-    EventBits_t bits;
-
-    while(1)
-    {
-        bits = xEventGroupWaitBits(dec->eventFlags, EVENT_WATCHDOG_KICK, pdTRUE, pdTRUE, 10000);
-
-        if((!(bits & EVENT_WATCHDOG_KICK)) && (dec->state == PLAYING))
-        {
-            printf("STALL: ndp_state = %lu, sm_state = %lu\n", ndp_state, sm_state);
-        }
-    }
-}
+//void VS1053::wdtTaskFunc(void* p)
+//{
+//    VS1053* dec = (VS1053*)p;
+//
+//    EventBits_t bits;
+//
+//    while(1)
+//    {
+//        bits = xEventGroupWaitBits(dec->eventFlags, EVENT_WATCHDOG_KICK, pdTRUE, pdTRUE, 10000);
+//
+//        if((!(bits & EVENT_WATCHDOG_KICK)) && (dec->state == PLAYING))
+//        {
+//            printf("STALL: ndp_state = %lu, sm_state = %lu\n", ndp_state, sm_state);
+//        }
+//    }
+//}
 
 void VS1053::setPlayType(PLAY_TYPE t)
 {
@@ -670,7 +573,7 @@ void VS1053::setPlayType(PLAY_TYPE t)
 
 uint16_t VS1053::getByteRate(VS1053* dec)
 {
-    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
+    dec->controlDev.acquire();
 
     /* Write address of byteRate to WRAMADDR */
     controlRegWrite(dec, WRAMADDR, 0x1e05, false);
@@ -678,7 +581,7 @@ uint16_t VS1053::getByteRate(VS1053* dec)
     /* Read value at address */
     uint16_t val = controlRegRead(dec, WRAM, false);
 
-    xSemaphoreGive(LabSPI::bus_lock);
+    dec->controlDev.release();
 
     return val;
 }
@@ -702,18 +605,27 @@ void VS1053::resume(void)
 void VS1053::sendEndFillByte(VS1053* dec, uint32_t count)
 {
     uint8_t endFillByte = getEndFillByte(dec);
+    uint8_t efbBuffer[4];
+    efbBuffer[0] = endFillByte;
+    efbBuffer[1] = endFillByte;
+    efbBuffer[2] = endFillByte;
+    efbBuffer[3] = endFillByte;
 
-    spi_cmd_t cmd;
-    cmd.type = DATA;
-    cmd.buffer = &endFillByte;
-    cmd.len = 1;
+    dec->dataDev.acquire();
 
-    xSemaphoreTake(LabSPI::bus_lock, portMAX_DELAY);
-
-    for(uint32_t i = 0; i < count; i++)
+    /* Send 4 at a time until there's less than 4 remaining */
+    for(; count >= 4; count -= 4)
     {
-        transceive(dec, &cmd);
+        waitForDReq(dec);
+        dec->dataDev.transceive(efbBuffer, 4);
     }
 
-    xSemaphoreGive(LabSPI::bus_lock);
+    /* Send the remaining bytes */
+    for(; count > 0; count--)
+    {
+        waitForDReq(dec);
+        dec->dataDev.transceive(&endFillByte, 1);
+    }
+
+    dec->dataDev.release();
 }

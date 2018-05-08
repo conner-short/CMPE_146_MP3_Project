@@ -27,6 +27,7 @@ public:
     static SPIController& getInstance(void);
 
     bool init(ssp_t ssp, frame_format_t ff, uint32_t sck_freq_hz);
+    bool setSckFreq(ssp_t ssp, uint32_t sck_freq_hz);
     void acquire(ssp_t ssp);
     void release(ssp_t ssp);
     void transceive(ssp_t ssp, uint8_t* buf, uint32_t len, SemaphoreHandle_t sem);

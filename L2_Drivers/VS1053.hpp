@@ -8,7 +8,7 @@
 #include "event_groups.h"
 #include "ff.h"
 #include "LabGPIO.hpp"
-#include "LabSPI.hpp"
+#include "SPIDev.hpp"
 #include "semphr.h"
 
 class VS1053
@@ -21,11 +21,6 @@ public:
 
     typedef enum {PLAY, FF, REW} PLAY_TYPE;
 
-    typedef struct
-    {
-        uint8_t port, pin;
-    } pin_t;
-
     /**
      * Initializes the VS1053 decoder
      *
@@ -37,7 +32,7 @@ public:
      *
      * @return Retuns true on success, false otherwise
      */
-    bool init(LabSPI::Peripheral spi_channel, pin_t& reset, pin_t& data_cs, pin_t& control_cs, pin_t& dreq);
+    bool init(SPIController::ssp_t ssp, pin_t& reset, pin_t& data_cs, pin_t& control_cs, pin_t& dreq);
 
     /**
      * Loads a file and begins playing it
@@ -64,7 +59,6 @@ public:
     void stop(void);
 
     /**
-     * NOTE: NOT IMPLEMENTED YET
      * Selects between normal playback, fast-forward, and rewind
      *
      * @param t  Playback type
@@ -82,8 +76,7 @@ public:
     bool setVolume(uint8_t vol);
 
 private:
-    static const uint32_t SPI_FREQ_HZ = 7899000;
-    static const uint32_t SPI_START_FREQ_HZ = 1500000;
+    static const uint32_t SPI_FREQ_HZ = 1200000;
     static const uint32_t STACK_SIZE = 1024;
     static const uint32_t BUFFER_SIZE = 1024;
     static const uint32_t SEEK_SPEED = 4; /* Speed multiplier for FF / Rew */
@@ -120,27 +113,13 @@ private:
         ENDING
     } state_t;
 
-    typedef enum
-    {
-        DATA,
-        CMD
-    } spi_cmd_type_t;
-
-    typedef struct
-    {
-        spi_cmd_type_t type;
-        uint8_t* buffer;
-		uint32_t len;
-    } spi_cmd_t;
-
     state_t state = INIT;
 
-    LabSPI::Peripheral spiDev = LabSPI::SSP0;
+    SPIController::ssp_t mSSP = SPIController::SSP0;
+    SPIDev dataDev, controlDev;
 
     /* Pins */
     LabGPIO resetPin;
-    LabGPIO dataCs;
-    LabGPIO controlCs;
     LabGPIO dataReq;
 
     PLAY_TYPE currentPlayType = PLAY; /* Play, FF, or rewind */
@@ -175,9 +154,6 @@ private:
     static void setVolumeInternal(VS1053* dec, uint8_t vol);
 
     static void waitForDReq(VS1053* dec);
-    static void transceive(VS1053* dec, spi_cmd_t* cmd);
-
-    static uint8_t getSpiDivider(bool speed);
 
     static bool sendNextDataPacket(VS1053* dec, bool* eof);
 

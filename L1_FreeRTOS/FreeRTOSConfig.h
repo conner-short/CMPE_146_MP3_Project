@@ -146,6 +146,7 @@
 #define INCLUDE_xTaskGetSchedulerState      1
 #define INCLUDE_xTaskGetIdleTaskHandle      1
 #define INCLUDE_xEventGroupSetBitFromISR    1
+#define INCLUDE_xSemaphoreGetMutexHolder    1
 
 /* FreeRTOS Timer or daemon task configuration */
 #define configUSE_TIMERS                1                   ///< Enable or disable the FreeRTOS timer task
