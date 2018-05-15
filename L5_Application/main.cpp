@@ -1,14 +1,14 @@
-#include <stdio.h>
-
 #include "FreeRTOS.h"
-
 #include "LPC17xx.h"
+
 #include "pin_t.hpp"
 #include "source/cmd_handlers/mp3Handler.hpp"
 #include "sys_config.h"
 #include "task.h"
 #include "tasks.hpp"
 #include "uart0_min.h"
+
+#include "SPIController.hpp"
 #include "VS1053.hpp"
 
 int main(void) {

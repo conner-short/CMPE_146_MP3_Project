@@ -1,11 +1,10 @@
-#include <stdio.h>
-
 #include "core_cm3.h"
 #include "lpc_isr.h"
 #include "SPIController.hpp"
 #include "sys_config.h"
+#include "task.h"
 
-SPIController::task_state_t SPIController::ssp0_state, SPIController::ssp1_state;
+SPIController::state_t SPIController::ssp0_state, SPIController::ssp1_state;
 
 SPIController::SPIController(void)
 {
@@ -42,26 +41,28 @@ bool SPIController::calcDividerSettings(uint32_t pclk_hz, uint32_t sck_freq_hz, 
      * frequency */
     for(uint32_t i = 2; i < 256; i += 2)
     {
-        for(uint32_t j = 1; j <= 1/*256*/; j++)
+        for(uint32_t j = 1; j <= 256; j++)
         {
             uint32_t sck_gen_hz = pclk_hz / (i * j);
 
-            /* Get absolute value of error */
-            uint32_t err = (sck_gen_hz > sck_freq_hz) ? sck_gen_hz - sck_freq_hz :
-                    sck_freq_hz - sck_gen_hz;
+            /* Treat input frequency sck_freq_hz as hard upper bound */
+            if(sck_gen_hz <= sck_freq_hz)
+            {
+                uint32_t err = sck_freq_hz - sck_gen_hz;
 
-            if(err < min_err)
-            {
-               min_err = err;
-               _cpsdvsr = i;
-               _scr_plus_1 = j;
-            }
-            if(err == 0)
-            {
-                /* If an exact match was found, return it immediately */
-                *cpsdvsr = (uint8_t)_cpsdvsr;
-                *scr = ((uint8_t)_scr_plus_1) - 1;
-                return true;
+                if(err < min_err)
+                {
+                   min_err = err;
+                   _cpsdvsr = i;
+                   _scr_plus_1 = j;
+                }
+                if(err == 0)
+                {
+                    /* If an exact match was found, return it immediately */
+                    *cpsdvsr = (uint8_t)_cpsdvsr;
+                    *scr = ((uint8_t)_scr_plus_1) - 1;
+                    return true;
+                }
             }
         }
     }
@@ -74,7 +75,7 @@ bool SPIController::calcDividerSettings(uint32_t pclk_hz, uint32_t sck_freq_hz, 
 
 bool SPIController::setSckFreq(ssp_t ssp, uint32_t sck_freq_hz)
 {
-    task_state_t* state;
+    state_t* state;
 
     switch(ssp)
     {
@@ -97,7 +98,6 @@ bool SPIController::setSckFreq(ssp_t ssp, uint32_t sck_freq_hz)
     }
 
     state->ssp->CR1 &= 0xD; /* Disable the SSP, if enabled, before adjusting settings */
-    xQueueReset(state->queue);
 
     state->ssp->CR0 &= 0xFF;
     state->ssp->CR0 |= (scr << 8);
@@ -133,7 +133,7 @@ bool SPIController::init(ssp_t ssp, frame_format_t ff, uint32_t sck_freq_hz)
 
     cr0 |= (scr << 8);
 
-    task_state_t* state;
+    state_t* state;
 
     /* Power and clock */
     switch(ssp)
@@ -159,77 +159,25 @@ bool SPIController::init(ssp_t ssp, frame_format_t ff, uint32_t sck_freq_hz)
         default: return false;
     }
 
+    /* Create SSP mutex */
+    if(state->bus_lock == NULL)
+    {
+        state->bus_lock = xSemaphoreCreateMutex();
+
+        if(state->bus_lock == NULL)
+        {
+            switch(ssp)
+            {
+                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
+                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
+                default: return false;
+            }
+        }
+    }
+
     state->ssp->CR1 &= 0xD; /* Disable the SSP, if enabled, before adjusting settings */
 
-    if(state->task == NULL)
-    {
-        /* Create the queue */
-        state->queue = xQueueCreate(8, sizeof(spi_msg_t));
-
-        if(state->queue == NULL)
-        {
-            switch(ssp)
-            {
-                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
-                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
-                default: return false;
-            }
-        }
-
-        /* Create event group */
-        state->ev = xEventGroupCreate();
-
-        if(state->ev == NULL)
-        {
-            switch(ssp)
-            {
-                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
-                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
-                default: return false;
-            }
-        }
-
-        /* Create SSP mutex */
-        state->mutex = xSemaphoreCreateMutex();
-
-        if(state->mutex == NULL)
-        {
-            switch(ssp)
-            {
-                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
-                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
-                default: return false;
-            }
-        }
-
-        BaseType_t res;
-
-        /* Start controller task */
-        switch(ssp)
-        {
-            case SSP0: res = xTaskCreate(SSP0ControllerTask, "SSP0", STACK_DEPTH, NULL, 3, &(state->task)); break;
-            case SSP1: res = xTaskCreate(SSP1ControllerTask, "SSP1", STACK_DEPTH, NULL, 3, &(state->task)); break;
-            default: return false;
-        }
-
-        if(res != pdPASS)
-        {
-            switch(ssp)
-            {
-                case SSP0: LPC_SC->PCONP &= ~(1 << 21); return false;
-                case SSP1: LPC_SC->PCONP &= ~(1 << 10); return false;
-                default: return false;
-            }
-        }
-    }
-    else
-    {
-        /* Reset the existing task (clear its queue) */
-        xQueueReset(state->queue);
-    }
-
-    /* Disable all interrupts */
-    state->ssp->IMSC = 0x0;
+    state->ssp->IMSC = 0x0; /* Disable all interrupts */
 
     /* Register interrupt handler */
     switch(ssp)
@@ -251,44 +199,7 @@ bool SPIController::init(ssp_t ssp, frame_format_t ff, uint32_t sck_freq_hz)
     state->ssp->CPSR = (uint32_t)cpsdvsr;
     state->ssp->CR1  = 0x2; /* Enable the SSP */
 
-    xEventGroupSetBits(state->ev, EVENT_HW_READY);
-
     return true;
-}
-
-void SPIController::SSP0ControllerTask(void* p)
-{
-    controllerTask(&ssp0_state);
-    vTaskSuspend(NULL); /* Should never reach here */
-}
-
-void SPIController::SSP1ControllerTask(void* p)
-{
-    controllerTask(&ssp1_state);
-    vTaskSuspend(NULL); /* Should never reach here */
-}
-
-void SPIController::controllerTask(task_state_t* state)
-{
-    xEventGroupWaitBits(state->ev, EVENT_HW_READY, pdFALSE, pdTRUE, portMAX_DELAY);
-
-    while(1)
-    {
-        xQueueReceive(state->queue, &(state->msg), portMAX_DELAY);
-
-        state->rx_i = 0;
-        state->tx_i = 0;
-
-        enableRxInterrupts(state->ssp);
-        enableTxInterrupts(state->ssp);
-
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        if(state->msg.sem != NULL)
-        {
-            xSemaphoreGive(state->msg.sem);
-        }
-    }
 }
 
 void SPIController::SSP0ISR(void)
@@ -301,78 +212,58 @@ void SPIController::SSP1ISR(void)
     portYIELD_FROM_ISR(ISR(&ssp1_state));
 }
 
-BaseType_t SPIController::ISR(task_state_t* s)
+BaseType_t SPIController::ISR(state_t* state)
 {
     BaseType_t woken = pdFALSE;
 
-    if(s->ssp->MIS & ((1 << 1) | (1 << 2)))
-    {
-        /* Rx FIFO not empty */
-
-        /* Empty the Rx FIFO to the buffer */
-        while((s->ssp->SR & (1 << 2)) && (s->rx_i < s->tx_i) && (s->rx_i < s->msg.len))
-        {
-            s->msg.buf[s->rx_i] = s->ssp->DR;
-            s->rx_i++;
-        }
-
-        if(s->rx_i >= s->msg.len)
-        {
-            disableRxInterrupts(s->ssp);
-        }
-    }
-
-    if(s->ssp->MIS & (1 << 3))
-    {
-        /* Tx FIFO at least half empty */
-
-        /* Can send up to 4 bytes */
-        for(uint32_t i = 0; (i < 4) && (s->tx_i < s->msg.len); i++, s->tx_i++)
-        {
-            s->ssp->DR = s->msg.buf[s->tx_i];
-        }
-
-        if(s->tx_i >= s->msg.len)
-        {
-            disableTxInterrupts(s->ssp);
-        }
-    }
-
-    if((s->tx_i >= s->msg.len) && (s->rx_i >= s->msg.len))
-    {
-        /* Notify task that transmit and receive are done */
-        vTaskNotifyGiveFromISR(s->task, &woken);
-    }
+    vTaskNotifyGiveFromISR(state->task, &woken);
+    state->ssp->ICR |= (1 << 1);
 
     return woken;
 }
 
-void SPIController::transceive(ssp_t ssp, uint8_t* buf, uint32_t len, SemaphoreHandle_t sem)
+void SPIController::transceive(ssp_t ssp, uint8_t* buf, uint32_t len)
 {
     if(buf != NULL)
     {
-        spi_msg_t new_msg;
-        new_msg.buf = buf;
-        new_msg.len = len;
-        new_msg.sem = sem;
+        state_t* s;
 
         switch(ssp)
         {
-            case SSP0:
-                if(xSemaphoreGetMutexHolder(ssp0_state.mutex) == xTaskGetCurrentTaskHandle())
-                {
-                    xQueueSend(ssp0_state.queue, &new_msg, portMAX_DELAY);
-                }
-                break;
+            case SSP0: s = &ssp0_state; break;
+            case SSP1: s = &ssp1_state; break;
+            default: return;
+        }
 
-            case SSP1:
-                if(xSemaphoreGetMutexHolder(ssp1_state.mutex) == xTaskGetCurrentTaskHandle())
-                {
-                    xQueueSend(ssp1_state.queue, &new_msg, portMAX_DELAY);
-                }
-                break;
+        s->task = xTaskGetCurrentTaskHandle();
 
-            default: break;
+        if(xSemaphoreGetMutexHolder(s->bus_lock) == s->task)
+        {
+            uint32_t i, tx_i = 0, rx_i = 0;
+
+            while((tx_i < len) && (rx_i < len))
+            {
+                /* Write to transmit FIFO */
+                for(i = 0; (i < 8) && (tx_i < len); i++, tx_i++)
+                {
+                    s->ssp->DR = buf[tx_i];
+                }
+
+                enableInterrupts(s->ssp);
+
+                while(rx_i < tx_i)
+                {
+                    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+                    while(s->ssp->SR & (1 << 2))
+                    {
+                        buf[rx_i] = s->ssp->DR;
+                        rx_i++;
+                    }
+                }
+
+                disableInterrupts(s->ssp);
+            }
         }
     }
 }
@@ -381,8 +272,8 @@ void SPIController::acquire(ssp_t ssp)
 {
     switch(ssp)
     {
-        case SSP0: xSemaphoreTake(ssp0_state.mutex, portMAX_DELAY); break;
-        case SSP1: xSemaphoreTake(ssp1_state.mutex, portMAX_DELAY); break;
+        case SSP0: xSemaphoreTake(ssp0_state.bus_lock, portMAX_DELAY); break;
+        case SSP1: xSemaphoreTake(ssp1_state.bus_lock, portMAX_DELAY); break;
         default:   break;
     }
 }
@@ -391,13 +282,11 @@ void SPIController::release(ssp_t ssp)
 {
     switch(ssp)
     {
-        case SSP0: xSemaphoreGive(ssp0_state.mutex); break;
-        case SSP1: xSemaphoreGive(ssp1_state.mutex); break;
+        case SSP0: xSemaphoreGive(ssp0_state.bus_lock); break;
+        case SSP1: xSemaphoreGive(ssp1_state.bus_lock); break;
         default:   break;
     }
 }
 
-void SPIController::disableTxInterrupts(volatile LPC_SSP_TypeDef* ssp) {ssp->IMSC &= 0x7;}
-void SPIController::disableRxInterrupts(volatile LPC_SSP_TypeDef* ssp) {ssp->IMSC &= 0x9;}
-void SPIController::enableTxInterrupts(volatile LPC_SSP_TypeDef* ssp)  {ssp->IMSC |= 0x8;}
-void SPIController::enableRxInterrupts(volatile LPC_SSP_TypeDef* ssp)  {ssp->IMSC |= 0x6;}
+void SPIController::disableInterrupts(volatile LPC_SSP_TypeDef* ssp) {ssp->IMSC &= ~((1 << 1));}
+void SPIController::enableInterrupts(volatile LPC_SSP_TypeDef* ssp)  {ssp->IMSC |=  ((1 << 1));}

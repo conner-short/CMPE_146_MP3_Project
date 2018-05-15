@@ -30,7 +30,7 @@ public:
     bool setSckFreq(ssp_t ssp, uint32_t sck_freq_hz);
     void acquire(ssp_t ssp);
     void release(ssp_t ssp);
-    void transceive(ssp_t ssp, uint8_t* buf, uint32_t len, SemaphoreHandle_t sem);
+    void transceive(ssp_t ssp, uint8_t* buf, uint32_t len);
 
 private:
     SPIController(void);
@@ -46,35 +46,22 @@ private:
     typedef struct
     {
         TaskHandle_t task = NULL;
-        QueueHandle_t queue = NULL;
-        EventGroupHandle_t ev = NULL;
-        SemaphoreHandle_t mutex = NULL;
+        SemaphoreHandle_t bus_lock = NULL;
         volatile LPC_SSP_TypeDef* ssp;
-        spi_msg_t msg;
-        uint32_t tx_i = 0;
-        uint32_t rx_i = 0;
-    } task_state_t;
+    } state_t;
 
     static const unsigned short STACK_DEPTH = 1024;
 
-    static const EventBits_t EVENT_HW_READY = 0x1;
-
-    static task_state_t ssp0_state, ssp1_state;
+    static state_t ssp0_state, ssp1_state;
 
     bool calcDividerSettings(uint32_t pclk_hz, uint32_t sck_freq_hz, uint8_t* cpsdvsr, uint8_t* scr);
 
-    static void controllerTask(task_state_t* s);
-    static void SSP0ControllerTask(void* p);
-    static void SSP1ControllerTask(void* p);
-
     static void SSP0ISR(void);
     static void SSP1ISR(void);
-    static BaseType_t ISR(task_state_t* state);
+    static BaseType_t ISR(state_t* state);
 
-    static void disableTxInterrupts(volatile LPC_SSP_TypeDef* ssp);
-    static void disableRxInterrupts(volatile LPC_SSP_TypeDef* ssp);
-    static void enableTxInterrupts(volatile LPC_SSP_TypeDef* ssp);
-    static void enableRxInterrupts(volatile LPC_SSP_TypeDef* ssp);
+    static void disableInterrupts(volatile LPC_SSP_TypeDef* ssp);
+    static void enableInterrupts(volatile LPC_SSP_TypeDef* ssp);
 };
 
 #endif

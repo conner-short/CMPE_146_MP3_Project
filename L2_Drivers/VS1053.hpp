@@ -6,10 +6,13 @@
 #include "FreeRTOS.h"
 
 #include "event_groups.h"
-#include "ff.h"
-#include "LabGPIO.hpp"
-#include "SPIDev.hpp"
 #include "semphr.h"
+
+#include "ff.h"
+#include "pin_t.hpp"
+
+#include "LabGPIO.hpp"
+#include "SPIController.hpp"
 
 class VS1053
 {
@@ -76,7 +79,8 @@ public:
     bool setVolume(uint8_t vol);
 
 private:
-    static const uint32_t SPI_FREQ_HZ = 1200000;
+    static const uint32_t SPI_START_FREQ_HZ = 1200000;
+    static const uint32_t SPI_FREQ_HZ = 7899000;
     static const uint32_t STACK_SIZE = 1024;
     static const uint32_t BUFFER_SIZE = 1024;
     static const uint32_t SEEK_SPEED = 4; /* Speed multiplier for FF / Rew */
@@ -116,11 +120,12 @@ private:
     state_t state = INIT;
 
     SPIController::ssp_t mSSP = SPIController::SSP0;
-    SPIDev dataDev, controlDev;
 
     /* Pins */
     LabGPIO resetPin;
     LabGPIO dataReq;
+    LabGPIO dataCs;
+    LabGPIO controlCs;
 
     PLAY_TYPE currentPlayType = PLAY; /* Play, FF, or rewind */
     PLAY_TYPE requestedPlayType = PLAY;
