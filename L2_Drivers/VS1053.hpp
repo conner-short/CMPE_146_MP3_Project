@@ -78,6 +78,16 @@ public:
      */
     bool setVolume(uint8_t vol);
 
+    /**
+     * Get the position in and length of the current file in seconds
+     *
+     * @param position_secs  Pointer to buffer for current playback position
+     * @param length_secs    Pointer to buffer for total length of current file
+     *
+     * @return Returns true on success, false otherwise
+     */
+    bool getTime(uint32_t* position_secs, uint32_t* length_secs);
+
 private:
     static const uint32_t SPI_START_FREQ_HZ = 1200000;
     static const uint32_t SPI_FREQ_HZ = 7899000;
@@ -112,9 +122,7 @@ private:
         SW_RESET,
         INIT,
         IDLE,
-        PLAYING,
-        STOPPING,
-        ENDING
+        PLAYING
     } state_t;
 
     state_t state = INIT;

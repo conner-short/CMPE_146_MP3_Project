@@ -117,7 +117,6 @@ void VS1053::workerTaskFunc(void* p)
     VS1053* dec = (VS1053*)p;
 
     bool eof;
-    uint32_t i; /* Loop counter */
 
     while(1)
     {
@@ -128,11 +127,16 @@ void VS1053::workerTaskFunc(void* p)
                 vTaskDelay(5);
                 dec->resetPin.setHigh();
 
+                SPIController::getInstance().setSckFreq(dec->mSSP, SPI_START_FREQ_HZ);
+
                 dec->state = INIT;
                 break;
 
             case SW_RESET:
-                controlRegSet(dec, MODE, 0x0002); /* Do a soft reset */
+                controlRegSet(dec, MODE, (1 << 2)); /* Do a soft reset */
+                waitForDReq(dec);
+
+                SPIController::getInstance().setSckFreq(dec->mSSP, SPI_START_FREQ_HZ);
 
                 dec->state = INIT;
                 break;
@@ -168,72 +172,27 @@ void VS1053::workerTaskFunc(void* p)
                 break;
 
             case PLAYING:
+                /* Need to do a software reset rather than the datasheet-specified
+                 * stopping / ending methods because the average byterate is not
+                 * reset between songs */
+
+                /* Check for stop request */
                 if(xEventGroupGetBits(dec->eventFlags) & EVENT_STOP)
                 {
                     xEventGroupClearBits(dec->eventFlags, EVENT_STOP);
 
-                    /* Set SM_CANCEL bit in MODE register */
-                    controlRegSet(dec, MODE, SM_CANCEL);
-
-                    dec->state = STOPPING;
-                    break;
+                    dec->state = HW_RESET;
                 }
 
-                if(!sendNextDataPacket(dec, &eof))
+                /* Send next data packet and check for end of file */
+                else if((!sendNextDataPacket(dec, &eof)) || eof)
                 {
-                    dec->state = SW_RESET;
-                }
-                else if(eof)
-                {
-                    controlRegSet(dec, MODE, SM_CANCEL);
-                    dec->state = ENDING;
-                }
-                break;
-
-            case STOPPING:
-                /* Send 2048 more bytes of file and wait for SM_CANCEL to clear */
-                for(i = 0; (i < 64) && (controlRegRead(dec, MODE, true) & SM_CANCEL); i++)
-                {
-                    if(!sendNextDataPacket(dec, &eof))
-                    {
-                        dec->state = SW_RESET;
-                    }
-                    else if(eof)
-                    {
-                        dec->state = ENDING;
-                    }
-                }
-
-                if(i == 64)
-                {
-                    dec->state = SW_RESET; /* SM_CANCEL stuck, do reset */
-                }
-                else if(dec->state == STOPPING) /* Ensure that we're still stopping */
-                {
-                    sendEndFillByte(dec, 2052); /* Send 2052 of endFillByte */
-                    dec->state = IDLE; /* Stopped, return to idle */
-                }
-                break;
-
-            case ENDING:
-                /* Send 2048 of endFillByte (32 at a time) and wait for SM_CANCEL to clear */
-                for(i = 0; (i < 64) && (controlRegRead(dec, MODE, true) & SM_CANCEL); i++)
-                {
-                    sendEndFillByte(dec, 32);
-                }
-
-                if(i == 64)
-                {
-                    dec->state = SW_RESET; /* SM_CANCEL stuck, do reset */
-                }
-                else
-                {
-                    dec->state = IDLE; /* Done, return to idle */
+                    dec->state = HW_RESET;
                 }
                 break;
 
             default:
-                dec->state = SW_RESET;
+                dec->state = HW_RESET;
                 break;
         }
     }
@@ -417,6 +376,7 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         case PLAY:
             dec->fileReadBase += dec->fileReadOffset;
             dec->fileReadOffset = 0;
+            dec->bytesToSend = BUFFER_SIZE;
             break;
 
         case FF:
@@ -470,7 +430,9 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
         }
 
         /* Refill buffer */
-        if(f_read(&(dec->currentFile), dec->fileBuffer, BUFFER_SIZE, (UINT*)(&(dec->bufferLen))) != FR_OK)
+        if(f_read(&(dec->currentFile), dec->fileBuffer,
+                (dec->bytesToSend > BUFFER_SIZE) ? BUFFER_SIZE : dec->bytesToSend,
+                        (UINT*)(&(dec->bufferLen))) != FR_OK)
         {
             return false;
         }
@@ -595,4 +557,32 @@ void VS1053::sendEndFillByte(VS1053* dec, uint32_t count)
     }
 
     spi.release(dec->mSSP);
+}
+
+bool VS1053::getTime(uint32_t* position_secs, uint32_t* length_secs)
+{
+    if(state != PLAYING)
+    {
+        return false;
+    }
+
+    uint32_t byte_rate = (uint32_t)getByteRate(this);
+
+    if(byte_rate == 0)
+    {
+        *position_secs = 0;
+        *length_secs = 0;
+    }
+    else
+    {
+        taskENTER_CRITICAL();
+        uint32_t position = fileReadBase + fileReadOffset;
+        uint32_t length = f_size(&currentFile);
+        taskEXIT_CRITICAL();
+
+        *position_secs = position / byte_rate;
+        *length_secs = length / byte_rate;
+    }
+
+    return true;
 }

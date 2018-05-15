@@ -36,7 +36,7 @@ int main(void) {
 
     mp3CmdDec = &mp3Decoder;
 
-    scheduler_add_task(new terminalTask(1));
+    scheduler_add_task(new terminalTask(2));
 
     scheduler_start();
 

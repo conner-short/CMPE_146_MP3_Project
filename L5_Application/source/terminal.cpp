@@ -69,7 +69,7 @@ bool terminalTask::taskEntry()
     CommandProcessor &cp = mCmdProc;
 
     // System information handlers
-    cp.addHandler(mp3Handler, "mp3", "Usage: mp3 play [file] | pause | stop | ff");
+    cp.addHandler(mp3Handler, "mp3", "Usage: mp3 play [file] | pause | stop | ff | time");
     cp.addHandler(taskListHandler, "info",    "Task/CPU Info.  Use 'info 200' to get CPU during 200ms");
     cp.addHandler(memInfoHandler,  "meminfo", "See memory info");
     cp.addHandler(healthHandler,   "health",  "Output system health");

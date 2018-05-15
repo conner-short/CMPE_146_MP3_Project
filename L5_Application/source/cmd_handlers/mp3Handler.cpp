@@ -53,6 +53,19 @@ CMD_HANDLER_FUNC(mp3Handler) {
     {
         mp3CmdDec->setPlayType(VS1053::REW);
     }
+    else if(strncmp(op, "time", strlen("time")) == 0)
+    {
+        uint32_t pos_secs, len_secs;
+
+        if(mp3CmdDec->getTime(&pos_secs, &len_secs))
+        {
+            output.printf("Time: %lu:%02lu / %lu:%02lu\n", pos_secs / 60, pos_secs % 60, len_secs / 60, len_secs % 60);
+        }
+        else
+        {
+            output.printf("Error: No file playing.\n");
+        }
+    }
     else
     {
         return false;
