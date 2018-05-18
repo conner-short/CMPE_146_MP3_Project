@@ -66,6 +66,16 @@ bool VS1053::init(SPIController::ssp_t ssp, pin_t& reset, pin_t& data_cs, pin_t&
     controlCs.setAsOutput();
     controlCs.setHigh();
 
+    /* Create mutexes */
+    stateMutex = xSemaphoreCreateMutex();
+    currentPlayTypeMutex = xSemaphoreCreateMutex();
+    byteRateMutex = xSemaphoreCreateMutex();
+
+    if((stateMutex == NULL) || (byteRateMutex == NULL) || (currentPlayTypeMutex == NULL))
+    {
+        return false;
+    }
+
     /* Create event flags */
     eventFlags = xEventGroupCreate();
 
@@ -75,7 +85,12 @@ bool VS1053::init(SPIController::ssp_t ssp, pin_t& reset, pin_t& data_cs, pin_t&
     }
 
     /* Create tasks */
-    if(xTaskCreate(workerTaskFunc, "VS1053", STACK_SIZE, this, 2, &workerTask) != pdPASS)
+    if(xTaskCreate(workerTaskFunc, "VS1053w", STACK_SIZE, this, 2, &workerTask) != pdPASS)
+    {
+        return false;
+    }
+
+    if(xTaskCreate(updateTaskFunc, "VS1053u", 128, this, 3, &updateTask) != pdPASS)
     {
         return false;
     }
@@ -112,36 +127,86 @@ void VS1053::handleDataReqIsr(void* p)
     }
 }
 
+void VS1053::updateTaskFunc(void* p)
+{
+    VS1053* dec = (VS1053*)p;
+
+    while(1)
+    {
+        vTaskDelay(1000);
+
+        xSemaphoreTake(dec->stateMutex, portMAX_DELAY);
+        switch(dec->state)
+        {
+            case PLAYING:
+                xSemaphoreGive(dec->stateMutex);
+
+                xSemaphoreTake(dec->currentPlayTypeMutex, portMAX_DELAY);
+                if(dec->currentPlayType == PLAY)
+                {
+                    xSemaphoreGive(dec->currentPlayTypeMutex);
+
+                    /* Update the byte rate of the playing song */
+                    xSemaphoreTake(dec->byteRateMutex, portMAX_DELAY);
+                    dec->byteRate = getByteRate(dec);
+                    xSemaphoreGive(dec->byteRateMutex);
+                }
+                else
+                {
+                    xSemaphoreGive(dec->currentPlayTypeMutex);
+                }
+                break;
+
+            case HW_RESET:
+            case SW_RESET:
+            case INIT:
+            case IDLE:
+            case PAUSED:
+            default:
+                xSemaphoreGive(dec->stateMutex);
+                break;
+        }
+    }
+}
+
 void VS1053::workerTaskFunc(void* p)
 {
     VS1053* dec = (VS1053*)p;
 
-    bool eof;
+    EventBits_t bits;
+    uint32_t seek_ofs;
 
     while(1)
     {
+        xSemaphoreTake(dec->stateMutex, portMAX_DELAY);
         switch(dec->state)
         {
             case HW_RESET:
+                xSemaphoreGive(dec->stateMutex);
+
                 dec->resetPin.setLow();
                 vTaskDelay(5);
                 dec->resetPin.setHigh();
 
                 SPIController::getInstance().setSckFreq(dec->mSSP, SPI_START_FREQ_HZ);
 
-                dec->state = INIT;
+                setState(dec, INIT);
                 break;
 
             case SW_RESET:
+                xSemaphoreGive(dec->stateMutex);
+
                 controlRegSet(dec, MODE, (1 << 2)); /* Do a soft reset */
                 waitForDReq(dec);
 
                 SPIController::getInstance().setSckFreq(dec->mSSP, SPI_START_FREQ_HZ);
 
-                dec->state = INIT;
+                setState(dec, INIT);
                 break;
 
             case INIT:
+                xSemaphoreGive(dec->stateMutex);
+
                 controlRegWrite(dec, MODE, 0x0800, true); /* Set mode register */
                 setVolumeInternal(dec, 0x18); /* Set initial volume to -12dB */
 
@@ -150,52 +215,172 @@ void VS1053::workerTaskFunc(void* p)
 
                 SPIController::getInstance().setSckFreq(dec->mSSP, SPI_FREQ_HZ);
 
-                dec->state = IDLE;
+                setState(dec, IDLE);
                 break;
 
             case IDLE:
+                xSemaphoreGive(dec->stateMutex);
+
                 if(xEventGroupWaitBits(dec->eventFlags, EVENT_NEW_FILE_SELECTED, pdTRUE, pdTRUE, portMAX_DELAY))
                 {
                     /* New file was selected, reset variables */
 
                     dec->bufferIndex  = 0;
                     dec->bufferLen = 0;
-                    dec->fileReadBase = 0;
-                    dec->fileReadOffset = 0;
-                    dec->bytesToSend = 0;
-                    dec->paused = false;
 
-                    xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE | EVENT_RESUME);
+                    xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE | EVENT_STOP | EVENT_RESUME);
 
-                    dec->state = PLAYING;
+                    setState(dec, PLAYING);
                 }
                 break;
 
             case PLAYING:
-                /* Need to do a software reset rather than the datasheet-specified
-                 * stopping / ending methods because the average byterate is not
-                 * reset between songs */
+                xSemaphoreGive(dec->stateMutex);
+
+                bits = xEventGroupGetBits(dec->eventFlags);
 
                 /* Check for stop request */
-                if(xEventGroupGetBits(dec->eventFlags) & EVENT_STOP)
+                if(bits & EVENT_STOP)
                 {
                     xEventGroupClearBits(dec->eventFlags, EVENT_STOP);
-
-                    dec->state = HW_RESET;
+                    setState(dec, HW_RESET);
                 }
 
-                /* Send next data packet and check for end of file */
-                else if((!sendNextDataPacket(dec, &eof)) || eof)
+                /* Check for pause */
+                else if(bits & EVENT_PAUSE)
                 {
-                    dec->state = HW_RESET;
+                    xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE);
+                    setState(dec, PAUSED);
+                }
+
+                else
+                {
+                    xSemaphoreTake(dec->currentPlayTypeMutex, portMAX_DELAY);
+
+                    /* Switch modes if necessary */
+                    if(dec->currentPlayType != dec->requestedPlayType)
+                    {
+                        switch(dec->requestedPlayType)
+                        {
+                            case FF:
+                            case REW:
+                                xSemaphoreGive(dec->currentPlayTypeMutex);
+
+                                /* Check if jumping in file is okay */
+                                if(!(controlRegRead(dec, STATUS, true) & SS_DO_NOT_JUMP))
+                                {
+                                    xSemaphoreTake(dec->byteRateMutex, portMAX_DELAY);
+
+                                    /* Check that byte rate has been updated */
+                                    if(dec->byteRate != 0)
+                                    {
+                                        xSemaphoreTake(dec->currentPlayTypeMutex, portMAX_DELAY);
+                                        dec->currentPlayType = dec->requestedPlayType;
+                                        xSemaphoreGive(dec->currentPlayTypeMutex);
+                                    }
+
+                                    xSemaphoreGive(dec->byteRateMutex);
+                                }
+                                break;
+
+                            case PLAY:
+                            default:
+                                dec->currentPlayType = dec->requestedPlayType;
+                                xSemaphoreGive(dec->currentPlayTypeMutex);
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        xSemaphoreGive(dec->currentPlayTypeMutex);
+                    }
+
+                    switch(dec->currentPlayType)
+                    {
+                        case PLAY:
+                            if(!sendNextDataPacket(dec))
+                            {
+                                setState(dec, HW_RESET);
+                            }
+                            break;
+
+                        case FF:
+                            /* Jump ahead a bit in the file at the fast-forward speed */
+                            seek_ofs = f_tell(&(dec->currentFile));
+
+                            xSemaphoreTake(dec->byteRateMutex, portMAX_DELAY);
+                            seek_ofs += dec->byteRate * SEEK_SPEED * SEEK_TICK_PERIOD_MS / 1000;
+                            xSemaphoreGive(dec->byteRateMutex);
+
+                            f_lseek(&(dec->currentFile), seek_ofs);
+
+                            vTaskDelay(SEEK_TICK_PERIOD_MS);
+                            break;
+
+                        case REW:
+                            seek_ofs = f_tell(&(dec->currentFile));
+
+                            xSemaphoreTake(dec->byteRateMutex, portMAX_DELAY);
+
+                            /* Handle underflow on backwards seek, FatFS doesn't do it automatically */
+                            if(seek_ofs > dec->byteRate * SEEK_SPEED * SEEK_TICK_PERIOD_MS / 1000)
+                            {
+                                seek_ofs -= dec->byteRate * SEEK_SPEED * SEEK_TICK_PERIOD_MS / 1000;
+                            }
+                            else
+                            {
+                                seek_ofs = 0;
+                            }
+
+                            xSemaphoreGive(dec->byteRateMutex);
+
+                            f_lseek(&(dec->currentFile), seek_ofs);
+
+                            vTaskDelay(SEEK_TICK_PERIOD_MS);
+                            break;
+
+                        default:
+                            setState(dec, HW_RESET);
+                            break;
+                    }
+
+                    /* Check for end-of-file */
+                    if(f_eof(&(dec->currentFile)))
+                    {
+                        setState(dec, HW_RESET);
+                    }
+                }
+                break;
+
+            case PAUSED:
+                xSemaphoreGive(dec->stateMutex);
+
+                bits = xEventGroupWaitBits(dec->eventFlags, EVENT_STOP | EVENT_RESUME, pdTRUE, pdFALSE, portMAX_DELAY);
+
+                if(bits & EVENT_STOP)
+                {
+                    setState(dec, HW_RESET);
+                }
+                else if(bits & EVENT_RESUME)
+                {
+                    setState(dec, PLAYING);
                 }
                 break;
 
             default:
-                dec->state = HW_RESET;
+                xSemaphoreGive(dec->stateMutex);
+
+                setState(dec, HW_RESET);
                 break;
         }
     }
+}
+
+void VS1053::setState(VS1053* dec, state_t s)
+{
+    xSemaphoreTake(dec->stateMutex, portMAX_DELAY);
+    dec->state = s;
+    xSemaphoreGive(dec->stateMutex);
 }
 
 bool VS1053::play(const char* path)
@@ -220,18 +405,25 @@ bool VS1053::play(const char* path)
     return true;
 }
 
+
 void VS1053::stop()
 {
-    if(state == PLAYING)
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+
+    if((state == PLAYING) || (state == PAUSED))
     {
         xEventGroupSetBits(eventFlags, EVENT_STOP);
     }
+
+    xSemaphoreGive(stateMutex);
 }
+
 
 void VS1053::setVolumeInternal(VS1053* dec, uint8_t vol)
 {
     controlRegWrite(dec, VOL, ((uint16_t)(vol << 8)) | ((uint16_t)(vol)), true);
 }
+
 
 uint16_t VS1053::controlRegRead(VS1053* dec, control_reg_t reg, bool acquireBus)
 {
@@ -263,6 +455,7 @@ uint16_t VS1053::controlRegRead(VS1053* dec, control_reg_t reg, bool acquireBus)
     return ((((uint16_t)cmd_buffer[2]) << 8) | ((uint16_t)cmd_buffer[3]));
 }
 
+
 void VS1053::controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus)
 {
     uint8_t cmd_buffer[4];
@@ -291,6 +484,7 @@ void VS1053::controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool 
     }
 }
 
+
 void VS1053::controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits)
 {
     uint16_t val;
@@ -306,6 +500,7 @@ void VS1053::controlRegSet(VS1053* dec, control_reg_t reg, uint16_t bits)
 
     spi.release(dec->mSSP);
 }
+
 
 void VS1053::controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits)
 {
@@ -323,6 +518,7 @@ void VS1053::controlRegClear(VS1053* dec, control_reg_t reg, uint16_t bits)
     spi.release(dec->mSSP);
 }
 
+
 void VS1053::waitForDReq(VS1053* dec) {
     if(!(dec->dataReq.getLevel()))
     {
@@ -330,116 +526,19 @@ void VS1053::waitForDReq(VS1053* dec) {
     }
 }
 
-bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
+bool VS1053::sendNextDataPacket(VS1053* dec)
 {
-    if(xEventGroupGetBits(dec->eventFlags) & EVENT_PAUSE)
-    {
-        xEventGroupClearBits(dec->eventFlags, EVENT_PAUSE);
-
-        dec->paused = true;
-
-        EventBits_t bits = xEventGroupWaitBits(dec->eventFlags,
-                EVENT_RESUME | EVENT_STOP, pdTRUE, pdFALSE, portMAX_DELAY);
-
-        dec->paused = false;
-
-        if(bits & EVENT_STOP)
-        {
-            /* Don't play anything else; just return so the stop handling can begin */
-            return true;
-        }
-    }
-
-    *eof = false;
-
-    if(dec->currentPlayType != dec->requestedPlayType)
-    {
-        if((dec->requestedPlayType == FF) || (dec->requestedPlayType == REW))
-        {
-            /* Check SS_DO_NOT_JUMP */
-            uint16_t status = controlRegRead(dec, STATUS, true);
-
-            if(!(status & SS_DO_NOT_JUMP))
-            {
-                dec->currentPlayType = dec->requestedPlayType;
-            }
-        }
-        else
-        {
-            dec->currentPlayType = dec->requestedPlayType;
-        }
-    }
-
-    /* Do mode-specific operations */
-    switch(dec->currentPlayType)
-    {
-        case PLAY:
-            dec->fileReadBase += dec->fileReadOffset;
-            dec->fileReadOffset = 0;
-            dec->bytesToSend = BUFFER_SIZE;
-            break;
-
-        case FF:
-            if(dec->bytesToSend == 0)
-            {
-                /* Update byteRate */
-                dec->byteRate = getByteRate(dec);
-
-                /* Adjust read base */
-                dec->fileReadBase += dec->byteRate;
-                dec->fileReadOffset = 0;
-
-                /* Send 2048 bytes of endFillByte to let the decoder prepare to skip
-                 * around */
-                sendEndFillByte(dec, 2048);
-
-                /* Send 1/SEEK_SPEED seconds of audio to the decoder */
-                dec->bytesToSend = (uint32_t)(dec->byteRate) / SEEK_SPEED;
-            }
-            break;
-
-        case REW:
-            if(dec->bytesToSend == 0)
-            {
-                /* Pretty much the same as fast-forwarding, just in reverse */
-
-                dec->byteRate = getByteRate(dec);
-
-                /* Mind the potential subtraction underflow */
-                dec->fileReadBase -= (dec->fileReadBase > dec->byteRate) ? dec->byteRate : 0;
-                dec->fileReadOffset = 0;
-
-                sendEndFillByte(dec, 2048);
-
-                dec->bytesToSend = (uint32_t)(dec->byteRate) / SEEK_SPEED;
-            }
-            break;
-
-        default:
-            return false;
-    }
-
     if(dec->bufferIndex >= dec->bufferLen)
     {
         dec->bufferIndex = 0;
 
-        /* Reposition read head */
-        if(f_lseek(&(dec->currentFile), dec->fileReadBase + dec->fileReadOffset) != FR_OK)
-        {
-            return false;
-        }
-
         /* Refill buffer */
-        if(f_read(&(dec->currentFile), dec->fileBuffer,
-                (dec->bytesToSend > BUFFER_SIZE) ? BUFFER_SIZE : dec->bytesToSend,
-                        (UINT*)(&(dec->bufferLen))) != FR_OK)
+        if(f_read(&(dec->currentFile), dec->fileBuffer, BUFFER_SIZE, (UINT*)(&(dec->bufferLen))) != FR_OK)
         {
             return false;
         }
         else if(dec->bufferLen == 0)
         {
-            *eof = true;
-
             return true;
         }
     }
@@ -462,11 +561,10 @@ bool VS1053::sendNextDataPacket(VS1053* dec, bool* eof)
 
     /* Update indexes */
     dec->bufferIndex += len;
-    dec->fileReadOffset += len;
-    dec->bytesToSend -= (dec->bytesToSend > len) ? len : dec->bytesToSend;
 
     return true;
 }
+
 
 uint8_t VS1053::getEndFillByte(VS1053* dec)
 {
@@ -485,10 +583,14 @@ uint8_t VS1053::getEndFillByte(VS1053* dec)
     return (uint8_t)val;
 }
 
+
 void VS1053::setPlayType(PLAY_TYPE t)
 {
+    xSemaphoreTake(currentPlayTypeMutex, portMAX_DELAY);
     requestedPlayType = t;
+    xSemaphoreGive(currentPlayTypeMutex);
 }
+
 
 uint16_t VS1053::getByteRate(VS1053* dec)
 {
@@ -509,19 +611,28 @@ uint16_t VS1053::getByteRate(VS1053* dec)
 
 void VS1053::pause(void)
 {
-    if(!paused)
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+
+    if(state == PLAYING)
     {
         xEventGroupSetBits(eventFlags, EVENT_PAUSE);
     }
+
+    xSemaphoreGive(stateMutex);
 }
 
 void VS1053::resume(void)
 {
-    if(paused)
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+
+    if(state == PAUSED)
     {
         xEventGroupSetBits(eventFlags, EVENT_RESUME);
     }
+
+    xSemaphoreGive(stateMutex);
 }
+
 
 void VS1053::sendEndFillByte(VS1053* dec, uint32_t count)
 {
@@ -561,27 +672,31 @@ void VS1053::sendEndFillByte(VS1053* dec, uint32_t count)
 
 bool VS1053::getTime(uint32_t* position_secs, uint32_t* length_secs)
 {
-    if(state != PLAYING)
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+
+    if((state != PLAYING) && (state != PAUSED))
     {
+        xSemaphoreGive(stateMutex);
         return false;
     }
 
-    uint32_t byte_rate = (uint32_t)getByteRate(this);
+    xSemaphoreGive(stateMutex);
 
-    if(byte_rate == 0)
+    xSemaphoreTake(byteRateMutex, portMAX_DELAY);
+
+    if(byteRate == 0)
     {
+        xSemaphoreGive(byteRateMutex);
+
         *position_secs = 0;
         *length_secs = 0;
     }
     else
     {
-        taskENTER_CRITICAL();
-        uint32_t position = fileReadBase + fileReadOffset;
-        uint32_t length = f_size(&currentFile);
-        taskEXIT_CRITICAL();
+        *position_secs = f_tell(&currentFile) / byteRate;
+        *length_secs = f_size(&currentFile) / byteRate;
 
-        *position_secs = position / byte_rate;
-        *length_secs = length / byte_rate;
+        xSemaphoreGive(byteRateMutex);
     }
 
     return true;

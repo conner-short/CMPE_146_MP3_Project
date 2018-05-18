@@ -94,6 +94,7 @@ private:
     static const uint32_t STACK_SIZE = 1024;
     static const uint32_t BUFFER_SIZE = 1024;
     static const uint32_t SEEK_SPEED = 4; /* Speed multiplier for FF / Rew */
+    static const uint32_t SEEK_TICK_PERIOD_MS = 20;
 
     /* From datasheet */
     typedef enum
@@ -122,7 +123,8 @@ private:
         SW_RESET,
         INIT,
         IDLE,
-        PLAYING
+        PLAYING,
+        PAUSED
     } state_t;
 
     state_t state = INIT;
@@ -139,25 +141,27 @@ private:
     PLAY_TYPE requestedPlayType = PLAY;
 
     TaskHandle_t workerTask = NULL;
+    TaskHandle_t updateTask = NULL;
+
+    SemaphoreHandle_t stateMutex = NULL;
+    SemaphoreHandle_t currentPlayTypeMutex = NULL;
+    SemaphoreHandle_t byteRateMutex = NULL;
 
     FIL currentFile;
     uint8_t fileBuffer[BUFFER_SIZE];
     uint32_t bufferLen = 0;
     uint32_t bufferIndex = 0;
-    uint32_t fileReadBase = 0;
-    uint32_t fileReadOffset = 0;
-    uint32_t bytesToSend = 0;
 
     uint16_t byteRate = 0;
 
     EventGroupHandle_t eventFlags = NULL;
 
-    bool paused = false;
-
     static void handleDataReqIsr(void* p);
 
     static void workerTaskFunc(void* p);
-    static void wdtTaskFunc(void* p);
+    static void updateTaskFunc(void* p);
+
+    static void setState(VS1053* dec, state_t s);
 
     static uint16_t controlRegRead(VS1053* dec, control_reg_t reg, bool acquireBus);
     static void controlRegWrite(VS1053* dec, control_reg_t reg, uint16_t val, bool acquireBus);
@@ -168,7 +172,7 @@ private:
 
     static void waitForDReq(VS1053* dec);
 
-    static bool sendNextDataPacket(VS1053* dec, bool* eof);
+    static bool sendNextDataPacket(VS1053* dec);
 
     static uint8_t getEndFillByte(VS1053* dec);
     static uint16_t getByteRate(VS1053* dec);
