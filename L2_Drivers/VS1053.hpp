@@ -173,6 +173,7 @@ private:
     static void waitForDReq(VS1053* dec);
 
     static bool sendNextDataPacket(VS1053* dec);
+    static void dataWrite(VS1053* dec, uint8_t* buf, uint32_t len);
 
     static uint8_t getEndFillByte(VS1053* dec);
     static uint16_t getByteRate(VS1053* dec);

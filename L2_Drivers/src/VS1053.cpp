@@ -174,7 +174,8 @@ void VS1053::workerTaskFunc(void* p)
     VS1053* dec = (VS1053*)p;
 
     EventBits_t bits;
-    uint32_t seek_ofs;
+    uint32_t seek_ofs, i;
+    uint8_t efb;
 
     while(1)
     {
@@ -277,6 +278,14 @@ void VS1053::workerTaskFunc(void* p)
                                         xSemaphoreTake(dec->currentPlayTypeMutex, portMAX_DELAY);
                                         dec->currentPlayType = dec->requestedPlayType;
                                         xSemaphoreGive(dec->currentPlayTypeMutex);
+
+                                        /* Send 2048 of endFillByte */
+                                        efb = getEndFillByte(dec);
+
+                                        for(i = 0; i < 2048; i++)
+                                        {
+                                            dataWrite(dec, &efb, 1);
+                                        }
                                     }
 
                                     xSemaphoreGive(dec->byteRateMutex);
@@ -547,6 +556,16 @@ bool VS1053::sendNextDataPacket(VS1053* dec)
     uint32_t len = ((dec->bufferLen - dec->bufferIndex) > MAX_TRANSCEIVE_SIZE) ?
             MAX_TRANSCEIVE_SIZE : dec->bufferLen - dec->bufferIndex;
 
+    dataWrite(dec, buf, len);
+
+    /* Update indexes */
+    dec->bufferIndex += len;
+
+    return true;
+}
+
+void VS1053::dataWrite(VS1053* dec, uint8_t* buf, uint32_t len)
+{
     SPIController& spi = SPIController::getInstance();
 
     spi.acquire(dec->mSSP);
@@ -558,11 +577,6 @@ bool VS1053::sendNextDataPacket(VS1053* dec)
     dec->dataCs.setHigh();
 
     spi.release(dec->mSSP);
-
-    /* Update indexes */
-    dec->bufferIndex += len;
-
-    return true;
 }
 
 
