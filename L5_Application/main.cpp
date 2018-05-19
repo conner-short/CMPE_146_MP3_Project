@@ -8,8 +8,62 @@
 #include "tasks.hpp"
 #include "uart0_min.h"
 
+#include "Scroll_Nav.hpp"
 #include "SPIController.hpp"
 #include "VS1053.hpp"
+
+void scrollInfoTask(void* p)
+{
+    Scroll_Nav nav;
+
+    pin_t s1;
+    s1.port = 0; s1.pin = 0;
+
+    pin_t s2;
+    s2.port = 2; s2.pin = 2;
+
+    pin_t s3;
+    s3.port = 2; s3.pin = 3;
+
+    pin_t s5;
+    s5.port = 0; s5.pin = 1;
+
+    pin_t wheel_a;
+    wheel_a.port = 0; wheel_a.pin = 26;
+
+    pin_t wheel_b;
+    wheel_b.port = 0; wheel_b.pin = 29;
+
+    if(nav.init(&s1, &s2, &s3, NULL, &s5, &wheel_a, &wheel_b))
+    {
+        while(1)
+        {
+            switch(nav.waitForNextEvent(portMAX_DELAY))
+            {
+                case Scroll_Nav::NONE: uart0_puts("ev: NONE"); break;
+                case Scroll_Nav::WHEEL_CW: uart0_puts("ev: WHEEL_CW"); break;
+                case Scroll_Nav::WHEEL_CCW: uart0_puts("ev: WHEEL_CCW"); break;
+                case Scroll_Nav::S1_DOWN: uart0_puts("ev: S1_DOWN"); break;
+                case Scroll_Nav::S1_UP: uart0_puts("ev: S1_UP"); break;
+                case Scroll_Nav::S2_DOWN: uart0_puts("ev: S2_DOWN"); break;
+                case Scroll_Nav::S2_UP: uart0_puts("ev: S2_UP"); break;
+                case Scroll_Nav::S3_DOWN: uart0_puts("ev: S3_DOWN"); break;
+                case Scroll_Nav::S3_UP: uart0_puts("ev: S3_UP"); break;
+                case Scroll_Nav::S4_DOWN: uart0_puts("ev: S4_DOWN"); break;
+                case Scroll_Nav::S4_UP: uart0_puts("ev: S4_UP"); break;
+                case Scroll_Nav::S5_DOWN: uart0_puts("ev: S5_DOWN"); break;
+                case Scroll_Nav::S5_UP: uart0_puts("ev: S5_UP"); break;
+                default: uart0_puts("ev: Error"); break;
+            }
+        }
+    }
+    else
+    {
+        uart0_puts("Error: could not init scroll wheel");
+
+        vTaskSuspend(NULL);
+    }
+}
 
 int main(void) {
     static VS1053 mp3Decoder;
@@ -37,6 +91,8 @@ int main(void) {
     mp3CmdDec = &mp3Decoder;
 
     scheduler_add_task(new terminalTask(2));
+
+    xTaskCreate(scrollInfoTask, "Scroll", 1024, NULL, 1, NULL);
 
     scheduler_start();
 

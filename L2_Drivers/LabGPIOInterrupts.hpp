@@ -1,6 +1,8 @@
 #ifndef LABGPIOINTERRUPTS_H
 #define LABGPIOINTERRUPTS_H
 
+#include <stdint.h>
+
 typedef enum
 {
     RISING,
