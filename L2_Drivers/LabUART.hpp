@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "queue.h"
+#include "semphr.h"
 #include "LPC17xx.h"
 
 class LabUART {
@@ -15,7 +16,7 @@ public:
     typedef enum {UART2, UART3} UARTn_t;
 
 private:
-    static const uint32_t RX_QUEUE_LENGTH = 1024;
+    static const uint32_t RX_QUEUE_LENGTH = 16;
 
     typedef struct
     {
@@ -46,6 +47,7 @@ private:
         uint32_t tx_bufsiz;
         uint32_t tx_bufpos;
         QueueHandle_t rx_queue;
+        SemaphoreHandle_t tx_sem;
     } uart_data_t;
 
     static uart_data_t uart2_data;

@@ -73,10 +73,8 @@ public:
      *
      * @param vol  Offset from full volume in -0.5dB increments; 0x00 is full volume,
      *             0xfe is silence, and 0xff powers off the amplifier
-     *
-     * @return Returns true on success, false otherwise
      */
-    bool setVolume(uint8_t vol);
+    void setVolume(uint8_t vol);
 
     /**
      * Get the position in and length of the current file in seconds

@@ -85,7 +85,7 @@ bool VS1053::init(SPIController::ssp_t ssp, pin_t& reset, pin_t& data_cs, pin_t&
     }
 
     /* Create tasks */
-    if(xTaskCreate(workerTaskFunc, "VS1053w", STACK_SIZE, this, 2, &workerTask) != pdPASS)
+    if(xTaskCreate(workerTaskFunc, "VS1053w", STACK_SIZE, this, 1, &workerTask) != pdPASS)
     {
         return false;
     }
@@ -427,6 +427,10 @@ void VS1053::stop()
     xSemaphoreGive(stateMutex);
 }
 
+void VS1053::setVolume(uint8_t vol)
+{
+    setVolumeInternal(this, vol);
+}
 
 void VS1053::setVolumeInternal(VS1053* dec, uint8_t vol)
 {

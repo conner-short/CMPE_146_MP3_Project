@@ -6,6 +6,7 @@
 #include "LPC17xx.h"
 #include "lpc_isr.h"
 #include "queue.h"
+#include "semphr.h"
 #include "sys_config.h"
 
 LabUART::uart_data_t LabUART::uart2_data;
@@ -25,12 +26,14 @@ void LabUART::clearDataStructs(void)
     uart2_data.uart = LPC_UART2;
     uart2_data.rx_queue = NULL;
     uart2_data.tx_buf = NULL;
+    uart2_data.tx_sem = NULL;
     uart2_data.tx_bufpos = 0;
     uart2_data.tx_bufsiz = 0;
 
     uart3_data.uart = LPC_UART3;
     uart3_data.rx_queue = NULL;
     uart3_data.tx_buf = NULL;
+    uart3_data.tx_sem = NULL;
     uart3_data.tx_bufpos = 0;
     uart3_data.tx_bufsiz = 0;
 }
@@ -88,6 +91,13 @@ bool LabUART::init(UARTn_t channel, uint8_t data_size, parity_t parity, uint8_t 
                 {
                     return false;
                 }
+
+                uart->tx_sem = xSemaphoreCreateBinary();
+
+                if(uart->tx_sem == NULL)
+                {
+                    return false;
+                }
             }
 
             /* Power UART2 */
@@ -113,6 +123,13 @@ bool LabUART::init(UARTn_t channel, uint8_t data_size, parity_t parity, uint8_t 
                 uart->rx_queue = xQueueCreate(RX_QUEUE_LENGTH, sizeof(uint8_t));
 
                 if(uart->rx_queue == NULL)
+                {
+                    return false;
+                }
+
+                uart->tx_sem = xSemaphoreCreateBinary();
+
+                if(uart->tx_sem == NULL)
                 {
                     return false;
                 }
@@ -234,6 +251,7 @@ void LabUART::transmit(UARTn_t channel, const uint8_t* buf, uint32_t bufsiz)
     uart->uart->IER |= (1 << 1); /* Enable transmit empty interrupt */
 
     txNextByte(uart);
+    xSemaphoreTake(uart->tx_sem, portMAX_DELAY);
 }
 
 uint8_t LabUART::receive(UARTn_t channel)
@@ -310,23 +328,31 @@ void LabUART::handleIsrChannel(UARTn_t channel)
     }
 
     uint8_t byte;
+    BaseType_t woken = pdFALSE;
 
     switch((uart->uart->IIR >> 1) & 7)
     {
         case 1: /* Transmit empty */
             txNextByte(uart);
+
+            if(uart->tx_bufpos == uart->tx_bufsiz)
+            {
+                xSemaphoreGiveFromISR(uart->tx_sem, &woken);
+            }
             break;
 
         case 6:
         case 2: /* Receive available */
             byte = uart->uart->RBR;
 
-            xQueueSendToBackFromISR(uart->rx_queue, &byte, NULL);
+            xQueueSendToBackFromISR(uart->rx_queue, &byte, &woken);
             break;
 
         default:
             break;
     }
+
+    portYIELD_FROM_ISR(woken);
 }
 
 void LabUART::txNextByte(uart_data_t* uart)
