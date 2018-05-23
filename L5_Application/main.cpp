@@ -1,3 +1,4 @@
+#include <id3.hpp>
 #include <stdio.h>
 #include <string.h>
 
@@ -5,6 +6,7 @@
 #include "LPC17xx.h"
 
 #include "ff.h"
+#include "id3.hpp"
 #include "pin_t.hpp"
 #include "source/cmd_handlers/mp3Handler.hpp"
 #include "sys_config.h"
@@ -241,6 +243,10 @@ void appTask(void* p)
     uint8_t menu_file_paths[4][256];
     int menu_lines;
 
+    uint8_t titles[4][64];
+    uint8_t albums[4][64];
+    uint8_t artists[4][64];
+
     /* Do initial population of menu */
 
     for(menu_lines = 0; menu_lines < 4; menu_lines++)
@@ -248,6 +254,17 @@ void appTask(void* p)
         if(!getMP3Path(menu_lines, menu_file_paths[menu_lines], 256))
         {
             break;
+        }
+        else
+        {
+            /* Parse ID3 data */
+            if(!parse_id3_data(menu_file_paths[menu_lines], titles[menu_lines], 64,
+                    albums[menu_lines], 64, artists[menu_lines], 64))
+            {
+                titles[menu_lines][0] = '\0';
+                albums[menu_lines][0] = '\0';
+                artists[menu_lines][0] = '\0';
+            }
         }
     }
 
@@ -269,10 +286,10 @@ void appTask(void* p)
     vTaskDelay(5); /* Per screen datasheet */
 
     drawMenu(
-        menu_file_paths[(menu_buf_index + 0) % 4],
-        menu_file_paths[(menu_buf_index + 1) % 4],
-        menu_file_paths[(menu_buf_index + 2) % 4],
-        menu_file_paths[(menu_buf_index + 3) % 4],
+        titles[(menu_buf_index + 0) % 4],
+        titles[(menu_buf_index + 1) % 4],
+        titles[(menu_buf_index + 2) % 4],
+        titles[(menu_buf_index + 3) % 4],
         cursor_pos
     );
 
@@ -303,10 +320,10 @@ void appTask(void* p)
                             mode = MENU;
 
                             drawMenu(
-                                menu_file_paths[(menu_buf_index + 0) % 4],
-                                menu_file_paths[(menu_buf_index + 1) % 4],
-                                menu_file_paths[(menu_buf_index + 2) % 4],
-                                menu_file_paths[(menu_buf_index + 3) % 4],
+                                titles[(menu_buf_index + 0) % 4],
+                                titles[(menu_buf_index + 1) % 4],
+                                titles[(menu_buf_index + 2) % 4],
+                                titles[(menu_buf_index + 3) % 4],
                                 cursor_pos
                             );
                         }
@@ -331,6 +348,15 @@ void appTask(void* p)
                             else
                             {
                                 memcpy(menu_file_paths[(menu_buf_index + 3) % 4], path_buf, 256);
+
+                                if(!parse_id3_data(menu_file_paths[(menu_buf_index + 3) % 4],
+                                    titles[(menu_buf_index + 3) % 4], 64, albums[(menu_buf_index + 3) % 4], 64,
+                                    artists[(menu_buf_index + 3) % 4], 64))
+                                {
+                                    titles[(menu_buf_index + 3) % 4][0] = '\0';
+                                    albums[(menu_buf_index + 3) % 4][0] = '\0';
+                                    artists[(menu_buf_index + 3) % 4][0] = '\0';
+                                }
                             }
                         }
                         else if(cursor_pos < (menu_lines - 1))
@@ -340,10 +366,10 @@ void appTask(void* p)
                         }
 
                         drawMenu(
-                            menu_file_paths[(menu_buf_index + 0) % 4],
-                            menu_file_paths[(menu_buf_index + 1) % 4],
-                            menu_file_paths[(menu_buf_index + 2) % 4],
-                            menu_file_paths[(menu_buf_index + 3) % 4],
+                            titles[(menu_buf_index + 0) % 4],
+                            titles[(menu_buf_index + 1) % 4],
+                            titles[(menu_buf_index + 2) % 4],
+                            titles[(menu_buf_index + 3) % 4],
                             cursor_pos
                         );
                         break;
@@ -380,6 +406,15 @@ void appTask(void* p)
                             else
                             {
                                 memcpy(menu_file_paths[(menu_buf_index + 0) % 4], path_buf, 256);
+
+                                if(!parse_id3_data(menu_file_paths[(menu_buf_index + 0) % 4],
+                                    titles[(menu_buf_index + 0) % 4], 64, albums[(menu_buf_index +03) % 4], 64,
+                                    artists[(menu_buf_index + 0) % 4], 64))
+                                {
+                                    titles[(menu_buf_index + 0) % 4][0] = '\0';
+                                    albums[(menu_buf_index + 0) % 4][0] = '\0';
+                                    artists[(menu_buf_index + 0) % 4][0] = '\0';
+                                }
                             }
                         }
                         else
@@ -389,10 +424,10 @@ void appTask(void* p)
                         }
 
                         drawMenu(
-                            menu_file_paths[(menu_buf_index + 0) % 4],
-                            menu_file_paths[(menu_buf_index + 1) % 4],
-                            menu_file_paths[(menu_buf_index + 2) % 4],
-                            menu_file_paths[(menu_buf_index + 3) % 4],
+                            titles[(menu_buf_index + 0) % 4],
+                            titles[(menu_buf_index + 1) % 4],
+                            titles[(menu_buf_index + 2) % 4],
+                            titles[(menu_buf_index + 3) % 4],
                             cursor_pos
                         );
                         break;
@@ -423,10 +458,10 @@ void appTask(void* p)
                         mode = MENU;
 
                         drawMenu(
-                            menu_file_paths[(menu_buf_index + 0) % 4],
-                            menu_file_paths[(menu_buf_index + 1) % 4],
-                            menu_file_paths[(menu_buf_index + 2) % 4],
-                            menu_file_paths[(menu_buf_index + 3) % 4],
+                            titles[(menu_buf_index + 0) % 4],
+                            titles[(menu_buf_index + 1) % 4],
+                            titles[(menu_buf_index + 2) % 4],
+                            titles[(menu_buf_index + 3) % 4],
                             cursor_pos
                         );
                         break;
