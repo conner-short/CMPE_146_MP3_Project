@@ -19,8 +19,10 @@
 #include "SPIController.hpp"
 #include "VS1053.hpp"
 
+#define CURRENTLY_PLAYING_INDEX ((menu_buf_index + cursor_pos) % 4)
+
 static const uint8_t SCREEN_REFRESH = 0x0C;
-static const uint8_t SCREEN_INIT[3] = {0x16, SCREEN_REFRESH, 0x11};
+static const uint8_t SCREEN_INIT[3] = {0x16, SCREEN_REFRESH, 0x12};
 static const uint8_t NO_CURSOR[2] = {' ', ' '};
 static const uint8_t CURSOR[2]    = {'>', ' '};
 static const uint8_t LINE0_START  = 0x80;
@@ -191,7 +193,7 @@ void drawMenu(uint8_t* line0, uint8_t* line1, uint8_t* line2, uint8_t* line3, in
     drawMenuLine(3, line3, cursor_pos == 3);
 }
 
-void drawPlayer(VS1053* dec, uint8_t vol, uint8_t* title, uint32_t time_secs)
+void drawPlayer(VS1053* dec, uint8_t vol, uint8_t* title, uint8_t* album, uint8_t* artist, uint32_t time_secs)
 {
     LabUART& uart = LabUART::getInstance();
 
@@ -199,15 +201,9 @@ void drawPlayer(VS1053* dec, uint8_t vol, uint8_t* title, uint32_t time_secs)
     vTaskDelay(5);
 
     /* Draw first line (name and time) */
+
     uart.transmit(LabUART::UART3, &LINE0_START, 1);
-    if(strlen((char*)title) > 10)
-    {
-        uart.transmit(LabUART::UART3, title, 10);
-    }
-    else
-    {
-        uart.transmit(LabUART::UART3, title, strlen((char*)title));
-    }
+    uart.transmit(LabUART::UART3, title, (strlen((char*)title) > 10) ? 10 : strlen((char*)title));
 
     uint8_t time_buf[9];
     time_buf[8] = '\0';
@@ -217,6 +213,21 @@ void drawPlayer(VS1053* dec, uint8_t vol, uint8_t* title, uint32_t time_secs)
 
     uart.transmit(LabUART::UART3, &TIME_START, 1);
     uart.transmit(LabUART::UART3, time_buf, strlen((char*)time_buf));
+
+    /* Draw second line (album/artist) */
+    uint32_t chars_remaining = 20;
+
+    uart.transmit(LabUART::UART3, &LINE1_START, 1);
+
+    uint32_t artist_len = (strlen((char*)artist) > 10) ? 10 : strlen((char*)artist);
+
+    uart.transmit(LabUART::UART3, artist, artist_len);
+
+    chars_remaining -= artist_len + 2;
+
+    uart.transmit(LabUART::UART3, (uint8_t*)"  ", 2);
+    uart.transmit(LabUART::UART3, album,
+        (chars_remaining < strlen((char*)album)) ? chars_remaining : strlen((char*)album));
 
     /* Draw volume line */
 
@@ -242,6 +253,10 @@ void appTask(void* p)
 
     uint8_t menu_file_paths[4][256];
     int menu_lines;
+
+    uint8_t playing_title[64];
+    uint8_t playing_album[64];
+    uint8_t playing_artist[64];
 
     uint8_t titles[4][64];
     uint8_t albums[4][64];
@@ -296,7 +311,7 @@ void appTask(void* p)
     uint8_t path_buf[256];
 
     uint32_t time_secs = 0;
-    bool paused = false;
+    bool paused = false;;
 
     while(1)
     {
@@ -312,7 +327,7 @@ void appTask(void* p)
                     case PLAYER:
                         if(dec->getTime(&time_secs, NULL))
                         {
-                            drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                            drawPlayer(dec, vol, playing_title, playing_album, playing_artist, time_secs);
                         }
                         else
                         {
@@ -382,7 +397,7 @@ void appTask(void* p)
                             dec->setVolume(vol);
                         }
 
-                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        drawPlayer(dec, vol, playing_title, playing_album, playing_artist, time_secs);
                         break;
                 }
                 break;
@@ -440,7 +455,7 @@ void appTask(void* p)
                             dec->setVolume(vol);
                         }
 
-                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        drawPlayer(dec, vol, playing_title, playing_album, playing_artist, time_secs);
                         break;
                 }
                 break;
@@ -451,7 +466,7 @@ void appTask(void* p)
                     case MENU:
                         mode = PLAYER;
 
-                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        drawPlayer(dec, vol, playing_title, playing_album, playing_artist, time_secs);
                         break;
 
                     case PLAYER:
@@ -494,12 +509,16 @@ void appTask(void* p)
                 switch(mode)
                 {
                     case MENU:
+                        strncpy((char*)playing_title, (char*)titles[CURRENTLY_PLAYING_INDEX], 64);
+                        strncpy((char*)playing_album, (char*)albums[CURRENTLY_PLAYING_INDEX], 64);
+                        strncpy((char*)playing_artist, (char*)artists[CURRENTLY_PLAYING_INDEX], 64);
+
                         /* Start playing song at cursor position */
-                        dec->play((char*)menu_file_paths[(menu_buf_index + cursor_pos) % 4]);
+                        dec->play((char*)menu_file_paths[CURRENTLY_PLAYING_INDEX]);
 
                         /* Start player mode */
                         mode = PLAYER;
-                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        drawPlayer(dec, vol, playing_title, playing_album, playing_artist, time_secs);
                         break;
 
                     case PLAYER:
@@ -596,7 +615,10 @@ int main(void) {
 
     xTaskCreate(appTask, "UI/App", 1024, &params, 2, NULL);
 
-    vTaskStartScheduler();
+    scheduler_add_task(new terminalTask(1));
+
+    /*vTaskStartScheduler();*/
+    scheduler_start();
 
     return 0;
 }
