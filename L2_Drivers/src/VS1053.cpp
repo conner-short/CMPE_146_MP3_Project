@@ -706,13 +706,27 @@ bool VS1053::getTime(uint32_t* position_secs, uint32_t* length_secs)
     {
         xSemaphoreGive(byteRateMutex);
 
-        *position_secs = 0;
-        *length_secs = 0;
+        if(position_secs != NULL)
+        {
+            *position_secs = 0;
+        }
+
+        if(length_secs != NULL)
+        {
+            *length_secs = 0;
+        }
     }
     else
     {
-        *position_secs = f_tell(&currentFile) / byteRate;
-        *length_secs = f_size(&currentFile) / byteRate;
+        if(position_secs != NULL)
+        {
+            *position_secs = f_tell(&currentFile) / byteRate;
+        }
+
+        if(length_secs != NULL)
+        {
+            *length_secs = f_size(&currentFile) / byteRate;
+        }
 
         xSemaphoreGive(byteRateMutex);
     }

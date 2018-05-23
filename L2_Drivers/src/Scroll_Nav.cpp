@@ -125,7 +125,7 @@ Scroll_Nav::event_t Scroll_Nav::waitForNextEvent(TickType_t ticksToWait)
 {
     event_t ev;
 
-    xQueueReceive(queue, &ev, portMAX_DELAY);
+    xQueueReceive(queue, &ev, ticksToWait);
 
     return ev;
 }

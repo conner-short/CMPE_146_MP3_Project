@@ -25,6 +25,7 @@ static const uint8_t LINE0_START  = 0x80;
 static const uint8_t LINE1_START  = 0x94;
 static const uint8_t LINE2_START  = 0xA8;
 static const uint8_t LINE3_START  = 0xBC;
+static const uint8_t TIME_START   = 0x8C;
 
 typedef struct
 {
@@ -188,6 +189,46 @@ void drawMenu(uint8_t* line0, uint8_t* line1, uint8_t* line2, uint8_t* line3, in
     drawMenuLine(3, line3, cursor_pos == 3);
 }
 
+void drawPlayer(VS1053* dec, uint8_t vol, uint8_t* title, uint32_t time_secs)
+{
+    LabUART& uart = LabUART::getInstance();
+
+    uart.transmit(LabUART::UART3, &SCREEN_REFRESH, 1);
+    vTaskDelay(5);
+
+    /* Draw first line (name and time) */
+    uart.transmit(LabUART::UART3, &LINE0_START, 1);
+    if(strlen((char*)title) > 10)
+    {
+        uart.transmit(LabUART::UART3, title, 10);
+    }
+    else
+    {
+        uart.transmit(LabUART::UART3, title, strlen((char*)title));
+    }
+
+    uint8_t time_buf[9];
+    time_buf[8] = '\0';
+
+    snprintf((char*)time_buf, 9, "%02lu:%02lu:%02lu",
+            time_secs / 3600, (time_secs / 60) % 60, time_secs % 60);
+
+    uart.transmit(LabUART::UART3, &TIME_START, 1);
+    uart.transmit(LabUART::UART3, time_buf, strlen((char*)time_buf));
+
+    /* Draw volume line */
+
+    uart.transmit(LabUART::UART3, &LINE3_START, 1);
+    uart.transmit(LabUART::UART3, (uint8_t*)"Vol  ", strlen("Vol  "));
+
+    uint32_t dots = (0xFE - vol) / 0x10;
+
+    for(uint32_t i = 0; i < dots; i++)
+    {
+        uart.transmit(LabUART::UART3, (uint8_t*)"*", 1);
+    }
+}
+
 void appTask(void* p)
 {
     VS1053* dec = ((task_params_t*)p)->dec;
@@ -237,12 +278,39 @@ void appTask(void* p)
 
     uint8_t path_buf[256];
 
+    uint32_t time_secs = 0;
+    bool paused = false;
+
     while(1)
     {
-        switch(nav->waitForNextEvent(500))
+        switch(nav->waitForNextEvent(1000))
         {
             case Scroll_Nav::NONE:
                 /* Waiting timed out */
+                switch(mode)
+                {
+                    case MENU:
+                        break;
+
+                    case PLAYER:
+                        if(dec->getTime(&time_secs, NULL))
+                        {
+                            drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        }
+                        else
+                        {
+                            /* Song is done, return to menu */
+                            mode = MENU;
+
+                            drawMenu(
+                                menu_file_paths[(menu_buf_index + 0) % 4],
+                                menu_file_paths[(menu_buf_index + 1) % 4],
+                                menu_file_paths[(menu_buf_index + 2) % 4],
+                                menu_file_paths[(menu_buf_index + 3) % 4],
+                                cursor_pos
+                            );
+                        }
+                }
                 break;
 
             case Scroll_Nav::WHEEL_CW:
@@ -287,6 +355,8 @@ void appTask(void* p)
                             vol -= 0x06;
                             dec->setVolume(vol);
                         }
+
+                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
                         break;
                 }
                 break;
@@ -329,45 +399,115 @@ void appTask(void* p)
 
                     case PLAYER:
                         /* Decrease the volume */
-                        if(vol < 0xFE)
+                        if(vol < 0xF8)
                         {
                             vol += 0x06;
                             dec->setVolume(vol);
+                        }
+
+                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        break;
+                }
+                break;
+
+            case Scroll_Nav::S2_UP:
+                switch(mode)
+                {
+                    case MENU:
+                        mode = PLAYER;
+
+                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        break;
+
+                    case PLAYER:
+                        mode = MENU;
+
+                        drawMenu(
+                            menu_file_paths[(menu_buf_index + 0) % 4],
+                            menu_file_paths[(menu_buf_index + 1) % 4],
+                            menu_file_paths[(menu_buf_index + 2) % 4],
+                            menu_file_paths[(menu_buf_index + 3) % 4],
+                            cursor_pos
+                        );
+                        break;
+                }
+                break;
+
+            case Scroll_Nav::S3_DOWN:
+                switch(mode)
+                {
+                    case MENU:
+                        break;
+
+                    case PLAYER:
+                        dec->setPlayType(VS1053::REW);
+                }
+                break;
+
+            case Scroll_Nav::S3_UP:
+                switch(mode)
+                {
+                    case MENU:
+                        break;
+
+                    case PLAYER:
+                        dec->setPlayType(VS1053::PLAY);
+                }
+                break;
+
+            case Scroll_Nav::S4_UP:
+                switch(mode)
+                {
+                    case MENU:
+                        /* Start playing song at cursor position */
+                        dec->play((char*)menu_file_paths[(menu_buf_index + cursor_pos) % 4]);
+
+                        /* Start player mode */
+                        mode = PLAYER;
+                        drawPlayer(dec, vol, (uint8_t*)"dummy", time_secs);
+                        break;
+
+                    case PLAYER:
+                        if(paused)
+                        {
+                            dec->resume();
+                            paused = false;
+                        }
+                        else
+                        {
+                            dec->pause();
+                            paused = true;
                         }
                         break;
                 }
                 break;
 
-            case Scroll_Nav::S1_DOWN:
-                break;
-
-            case Scroll_Nav::S1_UP:
-                break;
-
-            case Scroll_Nav::S2_DOWN:
-                break;
-
-            case Scroll_Nav::S2_UP:
-                break;
-
-            case Scroll_Nav::S3_DOWN:
-                break;
-
-            case Scroll_Nav::S3_UP:
-                break;
-
-            case Scroll_Nav::S4_DOWN:
-                break;
-
-            case Scroll_Nav::S4_UP:
-                break;
-
             case Scroll_Nav::S5_DOWN:
+                switch(mode)
+                {
+                    case MENU:
+                        break;
+
+                    case PLAYER:
+                        dec->setPlayType(VS1053::FF);
+                }
                 break;
 
             case Scroll_Nav::S5_UP:
-                break;
+            switch(mode)
+            {
+                case MENU:
+                    break;
 
+                case PLAYER:
+                    dec->setPlayType(VS1053::PLAY);
+            }
+            break;
+
+            case Scroll_Nav::S2_DOWN:
+            case Scroll_Nav::S1_DOWN:
+            case Scroll_Nav::S4_DOWN:
+            case Scroll_Nav::S1_UP:
             default: break;
         }
     }
@@ -415,17 +555,13 @@ int main(void) {
         }
     }
 
-    mp3CmdDec = &mp3Decoder;
-
     static task_params_t params;
     params.dec = &mp3Decoder;
     params.nav = &nav;
 
-    scheduler_add_task(new terminalTask(1));
+    xTaskCreate(appTask, "UI/App", 1024, &params, 2, NULL);
 
-    xTaskCreate(appTask, "UI/App", 1024, &params, 1, NULL);
-
-    scheduler_start();
+    vTaskStartScheduler();
 
     return 0;
 }

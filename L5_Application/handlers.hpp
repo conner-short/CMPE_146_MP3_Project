@@ -25,7 +25,7 @@
 
 #include "command_handler.hpp"
 
-CMD_HANDLER_FUNC(mp3Handler);
+//CMD_HANDLER_FUNC(mp3Handler);
 
 /// Handler for task list & CPU Information
 CMD_HANDLER_FUNC(taskListHandler);
