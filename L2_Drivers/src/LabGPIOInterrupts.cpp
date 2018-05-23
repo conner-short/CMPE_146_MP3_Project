@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "core_cm3.h"
@@ -15,11 +16,7 @@ LabGPIOInterrupts& LabGPIOInterrupts::getInstance()
     return instance;
 }
 
-void LabGPIOInterrupts::init()
-{
-    isr_register(EINT3_IRQn, externalIRQHandler);
-    NVIC_EnableIRQ(EINT3_IRQn);
-}
+void LabGPIOInterrupts::init() {}
 
 bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_ptr_t pin_isr, void* isr_param, InterruptCondition_E condition)
 {
@@ -102,6 +99,9 @@ bool LabGPIOInterrupts::attachInterruptHandler(uint8_t port, uint32_t pin, isr_p
             return false;
     }
 
+    isr_register(EINT3_IRQn, externalIRQHandler);
+    NVIC_EnableIRQ(EINT3_IRQn);
+
     return true;
 }
 
@@ -118,23 +118,32 @@ void LabGPIOInterrupts::externalIRQHandler(void)
         if((LPC_GPIOINT->IO0IntStatR & mask) != 0)
         {
             LPC_GPIOINT->IO0IntClr |= mask;    /* Clear the interrupt */
-            m_isr_table[0][0][i](m_isr_param_table[0][0][i]);   /* Call the service routine */
+            if(m_isr_table[0][0][i] != NULL)
+            {
+                m_isr_table[0][0][i](m_isr_param_table[0][0][i]);   /* Call the service routine */
+            }
         }
         else if((LPC_GPIOINT->IO0IntStatF & mask) != 0)
         {
             LPC_GPIOINT->IO0IntClr |= mask;
-            m_isr_table[0][1][i](m_isr_param_table[0][1][i]);
+            if(m_isr_table[0][1][i] != NULL) {
+                m_isr_table[0][1][i](m_isr_param_table[0][1][i]);
+            }
         }
 
         if((LPC_GPIOINT->IO2IntStatR & mask) != 0)
         {
             LPC_GPIOINT->IO2IntClr |= mask;
-            m_isr_table[1][0][i](m_isr_param_table[1][0][i]);
+            if(m_isr_table[1][0][i] != NULL) {
+                m_isr_table[1][0][i](m_isr_param_table[1][0][i]);
+            }
         }
         else if((LPC_GPIOINT->IO2IntStatF & mask) != 0)
         {
             LPC_GPIOINT->IO2IntClr |= mask;
-            m_isr_table[1][1][i](m_isr_param_table[1][1][i]);
+            if(m_isr_table[1][1][i] != NULL) {
+                m_isr_table[1][1][i](m_isr_param_table[1][1][i]);
+            }
         }
     }
 }
